@@ -23,6 +23,7 @@ classifiers = [
 ]
 dependencies = [
   "anndata>=0.13.3",
+  "h5py>=3.12",
   "numpy>=2.0",
   "pandas>=2.2",
   "scikit-learn>=1.7",

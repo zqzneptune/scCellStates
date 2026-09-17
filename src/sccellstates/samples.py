@@ -21,6 +21,7 @@ from pathlib import Path
 import anndata as ad
 import pandas as pd
 
+from sccellstates.dataset import read_rna_input
 from sccellstates.io import APIError, validate_anndata
 
 type Source = str | Path | ad.AnnData
@@ -119,8 +120,15 @@ def read_source(source: Source) -> ad.AnnData:
         return source
     path = Path(source)
     suffix = path.suffix.lower()
-    if suffix in _H5AD_SUFFIXES:
-        return ad.read_h5ad(path)
+    if suffix in _H5AD_SUFFIXES or path.is_dir():
+        try:
+            return read_rna_input(path)
+        except Exception as error:
+            if suffix == ".h5ad":
+                raise SampleError(str(error)) from error
+            # A .h5 file can be either AnnData or native 10x; the reader gives
+            # a format-specific error when neither structure is valid.
+            raise SampleError(str(error)) from error
     if suffix == ".zarr":
         try:
             return ad.read_zarr(path)

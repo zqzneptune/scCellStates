@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import anndata as ad
 import numpy as np
 from scipy import sparse
+from scipy.optimize import nnls
 from sklearn.decomposition import PCA
 from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import StandardScaler
@@ -110,6 +111,108 @@ class ProgramScorer:
         matrix = _vocabulary_matrix(adata, self.vocabulary, layer=layer)
         result = matrix @ self.vocabulary.weights.T
         return _dense_activities(result)
+
+
+@dataclass(frozen=True)
+class NNLSProjectionResult:
+    """Diagnostics and usages from fixed-basis non-negative projection."""
+
+    usages: np.ndarray
+    states: np.ndarray
+    cell_names: tuple[str, ...]
+    sample_id: str
+    projection_error: np.ndarray
+    relative_reconstruction_error: np.ndarray
+    feature_coverage: float
+    observed_feature_coverage: np.ndarray
+    missing_features: tuple[str, ...]
+    extra_features: tuple[str, ...]
+    warnings: tuple[str, ...]
+    vocabulary_id: str
+
+
+class NNLSProjector:
+    """Project cells onto a frozen program basis using row-wise NNLS."""
+
+    def __init__(self, vocabulary: ProgramSet, *, error_warning_threshold: float = 1.0) -> None:
+        if not isinstance(vocabulary, ProgramSet):
+            raise TypeError("vocabulary must be a ProgramSet")
+        if error_warning_threshold <= 0 or not np.isfinite(error_warning_threshold):
+            raise ValueError("error_warning_threshold must be positive and finite")
+        self.vocabulary = vocabulary
+        self.error_warning_threshold = float(error_warning_threshold)
+
+    def transform(
+        self,
+        adata: ad.AnnData,
+        *,
+        layer: str | None = None,
+        sample_id: str = "projection",
+    ) -> NNLSProjectionResult:
+        """Estimate nonnegative usages and normalized states without refitting."""
+        if not isinstance(adata, ad.AnnData):
+            raise TypeError("adata must be an anndata.AnnData object")
+        if not adata.var_names.is_unique:
+            raise StateError("adata.var_names must be unique")
+        matrix = get_matrix(adata, layer=layer)
+        values = matrix.data if sparse.issparse(matrix) else np.asarray(matrix)
+        if not np.issubdtype(values.dtype, np.number) or not np.isfinite(values).all():
+            raise StateError("selected expression matrix must be finite and numeric")
+        if (values < 0).any():
+            raise StateError("NNLS projection requires nonnegative expression values")
+        lookup = {str(name): index for index, name in enumerate(adata.var_names)}
+        present = tuple(name for name in self.vocabulary.feature_names if name in lookup)
+        missing = tuple(name for name in self.vocabulary.feature_names if name not in lookup)
+        extra = tuple(
+            str(name) for name in adata.var_names if name not in self.vocabulary.feature_names
+        )
+        if not present:
+            raise StateError("none of the vocabulary features are present in adata.var_names")
+        indices = np.fromiter((lookup[name] for name in present), dtype=np.int64)
+        weight_indices = np.fromiter(
+            (self.vocabulary.feature_names.index(name) for name in present), dtype=np.int64
+        )
+        basis = self.vocabulary.weights[:, weight_indices].T
+        usages = np.zeros((adata.n_obs, self.vocabulary.n_programs), dtype=np.float64)
+        errors = np.zeros(adata.n_obs, dtype=np.float64)
+        relative = np.zeros(adata.n_obs, dtype=np.float64)
+        coverage = np.zeros(adata.n_obs, dtype=np.float64)
+        for row in range(adata.n_obs):
+            observed = matrix[row, indices]
+            observed = (
+                observed.toarray().ravel()
+                if sparse.issparse(observed)
+                else np.asarray(observed).ravel()
+            )
+            usages[row], errors[row] = nnls(basis, observed)
+            norm = float(np.linalg.norm(observed))
+            relative[row] = (
+                errors[row] / norm if norm > 0 else (0.0 if errors[row] == 0 else np.inf)
+            )
+            coverage[row] = float(np.count_nonzero(observed) / len(present))
+        totals = usages.sum(axis=1)
+        states = np.zeros_like(usages)
+        nonzero = totals > 0
+        states[nonzero] = usages[nonzero] / totals[nonzero, None]
+        warning_messages = []
+        if missing:
+            warning_messages.append(f"{len(missing)} vocabulary features are missing")
+        if np.any(relative > self.error_warning_threshold):
+            warning_messages.append("some cells have high relative reconstruction error")
+        return NNLSProjectionResult(
+            usages=usages,
+            states=states,
+            cell_names=tuple(map(str, adata.obs_names)),
+            sample_id=str(sample_id),
+            projection_error=errors,
+            relative_reconstruction_error=relative,
+            feature_coverage=len(present) / self.vocabulary.n_features,
+            observed_feature_coverage=coverage,
+            missing_features=missing,
+            extra_features=extra,
+            warnings=tuple(warning_messages),
+            vocabulary_id=self.vocabulary.sample_id,
+        )
 
 
 def _vocabulary_matrix(

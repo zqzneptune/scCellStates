@@ -34,7 +34,7 @@ from sccellstates.samples import (
     samples_from_atlas,
     samples_from_sources,
 )
-from sccellstates.state import ProgramScorer
+from sccellstates.state import NNLSProjector, ProgramScorer
 
 type Input = str | Path | ad.AnnData
 
@@ -108,6 +108,15 @@ class ProjectionResult:
     cell_names: tuple[str, ...]
     vocabulary: ProgramSet
     provenance: Mapping[str, object]
+    states: np.ndarray | None = None
+    projection_error: np.ndarray | None = None
+    relative_reconstruction_error: np.ndarray | None = None
+    feature_coverage: float | None = None
+    observed_feature_coverage: np.ndarray | None = None
+    missing_features: tuple[str, ...] = ()
+    extra_features: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    vocabulary_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -184,9 +193,7 @@ def _read_input(source: Input) -> ad.AnnData:
     if isinstance(source, ad.AnnData):
         return source.copy()
     path = Path(source)
-    if path.suffix.lower() not in {".h5ad", ".h5"}:
-        raise APIError("input must be an AnnData object or an H5AD file")
-    return ad.read_h5ad(path)
+    return read_source(path)
 
 
 def _validate_workflow(modality: str, method: str) -> None:
@@ -279,6 +286,8 @@ def fit(
     layer: str | None = None,
     n_programs: int = 8,
     n_repeats: int = 3,
+    max_iter: int = 500,
+    tol: float = 1e-4,
     stability_threshold: float = 0.5,
     preprocessing: str = "library_size_log1p",
     min_counts_per_cell: float = 0,
@@ -337,7 +346,9 @@ def fit(
     matrix = get_matrix(prepared)
     feature_names = tuple(map(str, prepared.var_names))
     runs = tuple(
-        NMFProgramEstimator(n_programs=n_programs, random_state=random_state + run).fit(
+        NMFProgramEstimator(
+            n_programs=n_programs, random_state=random_state + run, max_iter=max_iter, tol=tol
+        ).fit(
             matrix, feature_names=feature_names, sample_id=f"{sample_id}::run_{run}"
         )
         for run in range(n_repeats)
@@ -361,7 +372,14 @@ def fit(
         "n_programs_requested": n_programs,
         "n_repeats": n_repeats,
         "random_state": random_state,
+        "max_iter": max_iter,
+        "tol": tol,
+        "fit_diagnostics": {
+            str(index): dict(run.parameters) for index, run in enumerate(runs)
+        },
+        "effective_K": programs.n_programs,
         "selected_K": programs.n_programs,
+        "input": dict(prepared.uns.get("sccellstates_input", {})),
     }
     return ProgramResult(
         programs=programs.weights,
@@ -979,6 +997,7 @@ def project(
     modality: str = "rna",
     layer: str | None = None,
     preprocessing: str = "identity",
+    method: str = "direct",
 ) -> ProjectionResult:
     """Project cells onto a fixed recurrent or sample-specific vocabulary.
 
@@ -990,6 +1009,8 @@ def project(
     onto nothing.
     """
     _validate_workflow(modality, "nmf")
+    if method not in {"direct", "nnls"}:
+        raise APIError("project method must be 'direct' or 'nnls'")
     programs = _as_program_set(vocabulary)
     prepared = _prepare_single_sample(
         source,
@@ -1004,10 +1025,36 @@ def project(
         remove_ribosomal=False,
         exclude_genes=(),
     )
+    if method == "nnls":
+        expected_preprocessing = programs.parameters.get("preprocessing")
+        if expected_preprocessing is not None and preprocessing != expected_preprocessing:
+            raise APIError(
+                f"projection preprocessing {preprocessing!r} is incompatible with the "
+                f"vocabulary scale {expected_preprocessing!r}"
+            )
+        nnls_result = NNLSProjector(programs).transform(prepared)
+        usages = nnls_result.usages
+        return ProjectionResult(
+            usages=usages,
+            cell_names=nnls_result.cell_names,
+            vocabulary=programs,
+            provenance={
+                "workflow": "fixed_vocabulary_projection", "method": method, "layer": layer
+            },
+            states=nnls_result.states,
+            projection_error=nnls_result.projection_error,
+            relative_reconstruction_error=nnls_result.relative_reconstruction_error,
+            feature_coverage=nnls_result.feature_coverage,
+            observed_feature_coverage=nnls_result.observed_feature_coverage,
+            missing_features=nnls_result.missing_features,
+            extra_features=nnls_result.extra_features,
+            warnings=nnls_result.warnings,
+            vocabulary_id=nnls_result.vocabulary_id,
+        )
     usages = ProgramScorer(programs).transform(prepared)
     return ProjectionResult(
         usages=usages,
         cell_names=tuple(map(str, prepared.obs_names)),
         vocabulary=programs,
-        provenance={"workflow": "fixed_vocabulary_projection", "layer": layer},
+        provenance={"workflow": "fixed_vocabulary_projection", "method": method, "layer": layer},
     )

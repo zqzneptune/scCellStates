@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -195,7 +196,9 @@ class NMFProgramEstimator:
             l1_ratio=self.l1_ratio,
             shuffle=False,
         )
-        model.fit(matrix)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            model.fit(matrix)
         weights = np.asarray(model.components_, dtype=np.float64)
         totals = weights.sum(axis=1, keepdims=True)
         if (totals == 0).any():
@@ -215,6 +218,10 @@ class NMFProgramEstimator:
                 "alpha_W": self.alpha_W,
                 "alpha_H": self.alpha_H,
                 "l1_ratio": self.l1_ratio,
+                "converged": int(model.n_iter_) < self.max_iter,
+                "n_iter": int(model.n_iter_),
+                "reconstruction_error": float(model.reconstruction_err_),
+                "warnings": tuple(str(item.message) for item in caught),
             },
         )
 

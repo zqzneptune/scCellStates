@@ -632,6 +632,11 @@ def build_vocabulary(
             "min_similarity": recurrence.min_similarity,
             "n_permutations": recurrence.n_permutations,
             "random_state": recurrence.random_state,
+            "preprocessing": next(
+                (item.parameters["preprocessing"] for item in recurrence.program_sets
+                 if "preprocessing" in item.parameters),
+                None,
+            ),
         },
     )
     return ProgramVocabulary(
