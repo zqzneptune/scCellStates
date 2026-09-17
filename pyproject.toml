@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sccellstates"
+version = "0.1.0"
+description = "Discover reproducible continuous cell states across single-cell samples"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Dr. Qingzhou Zhang" }]
+maintainers = [{ name = "Dr. Qingzhou Zhang" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+  "anndata>=0.13.3",
+  "numpy>=2.0",
+  "pandas>=2.2",
+  "scipy>=1.13",
+]
+
+[project.urls]
+Homepage = "https://github.com/zqzneptune/scCellStates"
+Repository = "https://github.com/zqzneptune/scCellStates"
+Issues = "https://github.com/zqzneptune/scCellStates/issues"
+
+[project.optional-dependencies]
+scanpy = ["scanpy>=1.12.4"]
+multimodal = ["mudata>=0.4.1"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-cov>=6",
+  "ruff>=0.12",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sccellstates"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --strict-config"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP"]
+
+[tool.coverage.run]
+source = ["sccellstates"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
