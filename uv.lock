@@ -1342,6 +1342,7 @@ dependencies = [
     { name = "anndata" },
     { name = "numpy" },
     { name = "pandas" },
+    { name = "scikit-learn" },
     { name = "scipy" },
 ]
 
@@ -1367,6 +1368,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "scanpy", marker = "extra == 'scanpy'", specifier = ">=1.12.4" },
+    { name = "scikit-learn", specifier = ">=1.7" },
     { name = "scipy", specifier = ">=1.13" },
 ]
 provides-extras = ["scanpy", "multimodal"]
