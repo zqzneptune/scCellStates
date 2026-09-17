@@ -764,6 +764,13 @@ def load_program_result(path: str | Path) -> ProgramResult:
 
     cell_names = tuple(map(str, adata.obs_names))
     feature_names = tuple(map(str, adata.var_names))
+    # AnnData versions that omit null values from HDF5 mappings can drop the
+    # explicit ``stability: None`` and ``layer: None`` fields.  Both are valid
+    # states of the public result contract, so restore those defaults while
+    # loading rather than making portable artifacts version-dependent.
+    stability_record = record.get("stability")
+    provenance = dict(provenance)
+    provenance.setdefault("layer", None)
     try:
         return ProgramResult(
             programs=programs,
@@ -773,7 +780,7 @@ def load_program_result(path: str | Path) -> ProgramResult:
             sample_id=str(record["sample_id"]),
             selected_K=selected_K,
             stability=_load_stability(
-                record["stability"],
+                stability_record,
                 name=name,
                 programs=programs,
                 feature_names=feature_names,
