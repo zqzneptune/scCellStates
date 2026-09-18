@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sccellstates"
-version = "0.1.0"
+version = "0.1.1"
 description = "Discover reproducible continuous cell states across single-cell samples"
 readme = "README.md"
 requires-python = ">=3.12"

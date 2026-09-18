@@ -303,8 +303,38 @@ def fit_pipeline(adata: ad.AnnData, config: PipelineConfig) -> PipelineResult:
     )
 
 
+def _program_reconstruction_report(
+    result: PipelineResult,
+    *,
+    sample_key: str,
+) -> pd.DataFrame:
+    """Measure expression reconstruction from the frozen program vocabulary.
+
+    Direct state reconstruction is an identity transform over program
+    activities, so it cannot evaluate whether a learned vocabulary explains
+    held-out expression. This metric uses the training-fitted vocabulary and
+    scorer to reconstruct only the vocabulary feature axis, then reports the
+    error by biological sample partition.
+    """
+    vocabulary = result.vocabulary_fit.vocabulary
+    # ``fit_pipeline()`` stores the selected and preprocessed matrix in X;
+    # reading a source layer here would score a different data representation.
+    lookup = {str(name): index for index, name in enumerate(result.adata.var_names)}
+    indices = np.fromiter(
+        (lookup[name] for name in vocabulary.feature_names), dtype=np.int64
+    )
+    matrix = get_matrix(result.adata, layer=None)[:, indices]
+    reconstructed = result.activities @ vocabulary.weights
+    if sparse.issparse(matrix):
+        observed = matrix.toarray()
+    else:
+        observed = np.asarray(matrix, dtype=np.float64)
+    labels = sample_partition_labels(result.adata.obs[sample_key].tolist(), result.split)
+    return reconstruction_by_partition(observed, reconstructed, labels)
+
+
 def tune_pipeline(adata: ad.AnnData, candidates: Sequence[PipelineConfig]) -> PipelineResult:
-    """Select a candidate using validation-sample reconstruction only.
+    """Select a candidate using validation-sample program reconstruction only.
 
     Every candidate is independently fitted with its own training-only
     workflow. The test samples are never used for selection. The returned
@@ -325,7 +355,11 @@ def tune_pipeline(adata: ad.AnnData, candidates: Sequence[PipelineConfig]) -> Pi
     results = tuple(fit_pipeline(adata, config) for config in configs)
     scores = []
     for result in results:
-        report = result.reports["direct_reconstruction"]
+        config = configs[len(scores)]
+        report = _program_reconstruction_report(
+            result,
+            sample_key=config.sample_key,
+        )
         validation = report.loc[report["partition"] == "validation", "mean_squared_error"]
         if validation.empty:
             raise PipelineError("validation samples must contain cells")
@@ -337,7 +371,7 @@ def tune_pipeline(adata: ad.AnnData, candidates: Sequence[PipelineConfig]) -> Pi
     )
     provenance = dict(selected.provenance)
     provenance["tuning"] = {
-        "selection_metric": "direct_reconstruction.validation.mean_squared_error",
+        "selection_metric": "program_reconstruction.validation.mean_squared_error",
         "selected_candidate": selected_index,
         "candidate_scores": scores,
     }

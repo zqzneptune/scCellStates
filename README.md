@@ -473,6 +473,35 @@ jobs may write into one shared `--output` directory: writing a *different*
 sample there is normal and needs no `--overwrite`, which is only required to
 replace the same sample again.
 
+The command fits whatever you give it and applies no filtering you did not ask
+for. `--min-counts-per-cell`, `--min-genes-per-cell`, `--min-cells-per-gene`,
+`--n-top-genes`, `--exclude-genes`, `--remove-mitochondrial` /
+`--no-remove-mitochondrial` and `--remove-ribosomal` / `--no-remove-ribosomal`
+select cells and genes, and `--max-iter`, `--tol` and `--stability-threshold`
+control the factorization. Every default matches `fit()`, so a command that
+names none of them fits exactly what it fitted before they existed.
+
+Repeated fits of one sample are independent of each other, so they can be fitted
+concurrently. `--n-jobs` sets how many worker processes to use:
+
+```bash
+python -m sccellstates fit \
+  --input donor_01.h5ad \
+  --output results/donor_01 \
+  --sample-id donor_01 \
+  --n-programs 16 \
+  --n-repeats 20 \
+  --n-jobs 4
+```
+
+The result does not depend on `--n-jobs`, which changes only how long the command
+takes. In Python, `fit()` applies it to the repeats of one sample and
+`fit_atlas()` and `fit_samples()` apply it to the samples; the per-sample fits stay
+serial so the two levels cannot multiply. Parallel execution needs the `fork`
+start method. Where that is unavailable, leave `n-jobs` at its default of 1 and
+distribute samples as separate jobs instead, which is what the command below
+already does.
+
 To distribute a large atlas, run that command once per donor, on as many nodes
 as you like, then combine the results:
 

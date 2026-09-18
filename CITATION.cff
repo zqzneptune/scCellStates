@@ -5,8 +5,8 @@ type: software
 authors:
   - family-names: "Zhang"
     given-names: "Qingzhou"
-version: 0.1.0
-date-released: 2026-09-16
+version: 0.1.1
+date-released: 2026-09-18
 license: MIT
 repository-code: "https://github.com/zqzneptune/scCellStates"
 url: "https://github.com/zqzneptune/scCellStates"

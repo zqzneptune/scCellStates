@@ -524,3 +524,23 @@ def test_loading_rejects_duplicate_names(tmp_path) -> None:
 def test_loading_rejects_a_missing_file(tmp_path) -> None:
     with pytest.raises(sccs.InputError, match="not a file"):
         sccs.load_program_result(tmp_path / "absent.h5ad")
+
+
+def test_program_result_records_the_environment_that_wrote_it(tmp_path) -> None:
+    """An artifact says which solver produced it.
+
+    The declared dependency floors allow a different scikit-learn to be resolved
+    in a different environment, so the resolved versions are what make a result
+    traceable. They are constants within an environment, which is why the
+    byte-identity guarantee still holds.
+    """
+    result = _program_result()
+    first = sccs.save_program_result(result, tmp_path / "first")
+    second = sccs.save_program_result(result, tmp_path / "second")
+    assert first.read_bytes() == second.read_bytes()
+
+    record = ad.read_h5ad(first).uns["sccellstates"]
+    assert record["package_version"] == sccs.__version__
+    for key in ("python_version", "numpy_version", "scipy_version", "scikit_learn_version"):
+        assert isinstance(record[key], str), f"{key} must record a version"
+        assert record[key]

@@ -11,6 +11,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
+from sccellstates import __version__
 from sccellstates.api import aggregate as aggregate_results
 from sccellstates.api import compare_projectors, fit_atlas, fit_samples, project
 from sccellstates.api import fit as fit_single_sample
@@ -187,9 +188,31 @@ def _write_cohort(result: object, output: Path, *, overwrite: bool) -> None:
     print(message)
 
 
+def _fit_options(args: argparse.Namespace) -> dict[str, object]:
+    """Fit settings shared by every input shape the ``fit`` command accepts.
+
+    ``fit``, ``fit_atlas``, and ``fit_samples`` all accept these names, so one
+    mapping forwards them to whichever entry point the inputs select.
+    """
+    return {
+        "max_iter": args.max_iter,
+        "tol": args.tol,
+        "stability_threshold": args.stability_threshold,
+        "min_counts_per_cell": args.min_counts_per_cell,
+        "min_genes_per_cell": args.min_genes_per_cell,
+        "min_cells_per_gene": args.min_cells_per_gene,
+        "n_top_genes": args.n_top_genes,
+        "remove_mitochondrial": args.remove_mitochondrial,
+        "remove_ribosomal": args.remove_ribosomal,
+        "exclude_genes": _csv_values(args.exclude_genes),
+        "n_jobs": args.n_jobs,
+    }
+
+
 def _fit(args: argparse.Namespace) -> int:
     """Run program discovery for one sample, one atlas, or several containers."""
     sources = [Path(path) for path in args.input]
+    options = _fit_options(args)
     if args.sample_key is None and len(sources) > 1:
         if args.sample_id is not None:
             raise ValueError("--sample-id applies to a single input; drop it or use --sample-key")
@@ -204,6 +227,7 @@ def _fit(args: argparse.Namespace) -> int:
             "min_similarity": args.min_similarity,
             "n_permutations": args.n_permutations,
             "random_state": args.seed,
+            **options,
         }
         result = fit_samples(sources, **shared)
         _write_cohort(result, Path(args.output), overwrite=args.overwrite)
@@ -222,6 +246,7 @@ def _fit(args: argparse.Namespace) -> int:
             "min_similarity": args.min_similarity,
             "n_permutations": args.n_permutations,
             "random_state": args.seed,
+            **options,
         }
         if len(sources) == 1:
             result = fit_atlas(sources[0], **shared)
@@ -242,6 +267,7 @@ def _fit(args: argparse.Namespace) -> int:
         n_repeats=args.n_repeats,
         preprocessing=args.preprocessing,
         random_state=args.seed,
+        **options,
     )
     output = Path(args.output)
     # Independent jobs for different samples share one results directory, so
@@ -337,7 +363,9 @@ def _compare(args: argparse.Namespace) -> int:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sccellstates")
-    parser.add_argument("--version", action="version", version="0.1.0")
+    # Read from the package rather than a literal: a copy here silently goes
+    # stale the moment the version is bumped.
+    parser.add_argument("--version", action="version", version=__version__)
     subparsers = parser.add_subparsers(dest="command")
     run = subparsers.add_parser("run", help="run a candidate pipeline on H5AD input")
     run.add_argument("--input", required=True, nargs="+", help="one or more H5AD files")
@@ -400,6 +428,39 @@ def _parser() -> argparse.ArgumentParser:
     fit.add_argument("--min-samples", type=int, default=2, help="samples supporting a program")
     fit.add_argument("--min-similarity", type=float, default=0.3)
     fit.add_argument("--n-permutations", type=int, default=1_000)
+    # Fit settings. Defaults mirror fit() exactly, so adding these flags cannot
+    # change what an existing invocation fits.
+    fit.add_argument("--max-iter", type=int, default=500)
+    fit.add_argument("--tol", type=float, default=1e-4)
+    fit.add_argument("--stability-threshold", type=float, default=0.5)
+    fit.add_argument("--min-counts-per-cell", type=float, default=0)
+    fit.add_argument("--min-genes-per-cell", type=int, default=0)
+    fit.add_argument("--min-cells-per-gene", type=int, default=0)
+    fit.add_argument(
+        "--n-top-genes",
+        type=int,
+        default=None,
+        help="keep this many most-variable genes; default: every gene",
+    )
+    fit.add_argument(
+        "--remove-mitochondrial",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="drop mitochondrial genes (--no-remove-mitochondrial to keep them)",
+    )
+    fit.add_argument(
+        "--remove-ribosomal",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="drop ribosomal genes (--no-remove-ribosomal to keep them)",
+    )
+    fit.add_argument("--exclude-genes", default="", help="comma-separated gene IDs or symbols")
+    fit.add_argument(
+        "--n-jobs",
+        type=int,
+        default=1,
+        help="worker processes for repeated and per-sample fits; 1 disables",
+    )
     fit.add_argument("--seed", type=int, default=0)
     fit.add_argument("--overwrite", action="store_true")
     fit.set_defaults(handler=_fit)

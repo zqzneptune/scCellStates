@@ -275,3 +275,62 @@ def test_aggregate_combines_independently_fitted_samples(tmp_path) -> None:
     assert summary["provenance"]["sample_ids"] == ["d1", "d2", "d3"]
     # Aggregating re-emits the per-sample artifacts it consumed.
     assert (model / "samples" / "d1.h5ad").exists()
+
+
+def test_fit_forwards_quality_control_and_fit_flags(tmp_path) -> None:
+    """The fit command must express everything fit() accepts.
+
+    Without these flags a per-donor job cannot apply the same cell and gene
+    filtering as the Python API, which is what previously forced a forwarding
+    wrapper between the engine and a cluster job. The flags default to the
+    fit() defaults, so adding them cannot change an existing invocation.
+    """
+    input_path = tmp_path / "atlas.h5ad"
+    _cohort_atlas().write_h5ad(input_path)
+    common = [
+        "fit",
+        "--input",
+        str(input_path),
+        "--sample-id",
+        "donor_x",
+        "--n-programs",
+        "2",
+        "--n-repeats",
+        "1",
+        "--preprocessing",
+        "identity",
+    ]
+    default_dir = tmp_path / "default"
+    filtered_dir = tmp_path / "filtered"
+
+    assert main([*common, "--output", str(default_dir)]) == 0
+    assert (
+        main(
+            [
+                *common,
+                "--output",
+                str(filtered_dir),
+                "--max-iter",
+                "150",
+                "--tol",
+                "0.01",
+                "--min-counts-per-cell",
+                "30",
+                "--exclude-genes",
+                "g0,g1",
+                # Both boolean spellings, which is how a job script writes them.
+                "--remove-mitochondrial",
+                "--no-remove-ribosomal",
+            ]
+        )
+        == 0
+    )
+
+    default = sccs.load_program_result(default_dir / "donor_x.h5ad")
+    filtered = sccs.load_program_result(filtered_dir / "donor_x.h5ad")
+    assert default.provenance["max_iter"] == 500
+    assert filtered.provenance["max_iter"] == 150
+    assert filtered.provenance["tol"] == 0.01
+    assert len(filtered.feature_names) == len(default.feature_names) - 2
+    assert "g0" not in filtered.feature_names
+    assert len(filtered.cell_names) <= len(default.cell_names)

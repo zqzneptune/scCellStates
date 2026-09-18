@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import multiprocessing
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import ProcessPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import anndata as ad
 import numpy as np
@@ -38,6 +42,97 @@ from sccellstates.samples import (
 from sccellstates.state import ProgramScorer
 
 type Input = str | Path | ad.AnnData
+
+# Forked children inherit the parent's memory, so the large objects a fit works
+# on are published here rather than handed to the pool as task arguments.
+# Pickling a task argument would serialize the matrix, and an AnnData view
+# serializes its entire parent: a 3,000-cell view of a 12,000-cell atlas
+# pickles to 2.6 MB, the same as the atlas itself. Only a task index crosses
+# the process boundary.
+_PARALLEL_STATE: dict[str, object] = {}
+
+
+def _published(key: str) -> Any:
+    """Read state published for the current task."""
+    try:
+        return _PARALLEL_STATE[key]
+    except KeyError as error:  # pragma: no cover - defensive
+        raise APIError(f"parallel state {key!r} was not published") from error
+
+
+@contextmanager
+def _published_state(**state: object) -> Iterator[None]:
+    global _PARALLEL_STATE
+    previous = _PARALLEL_STATE
+    _PARALLEL_STATE = state
+    try:
+        yield
+    finally:
+        _PARALLEL_STATE = previous
+
+
+def _fork_context() -> multiprocessing.context.BaseContext:
+    try:
+        return multiprocessing.get_context("fork")
+    except ValueError as error:  # pragma: no cover - platform dependent
+        raise APIError(
+            "n_jobs greater than 1 requires the 'fork' multiprocessing start method, "
+            "which this platform does not provide. Fit with n_jobs=1 and distribute "
+            "samples as separate jobs instead."
+        ) from error
+
+
+def _map_tasks(
+    function: Callable[[int], Any],
+    n_items: int,
+    n_jobs: int,
+    **state: object,
+) -> list[Any]:
+    """Apply ``function`` to ``0..n_items-1``, returning results in that order.
+
+    The serial and parallel routes run the same callable over the same published
+    state, so they cannot disagree about a result. Results are collected with
+    ``map``, which preserves index order: the order repeated fits are combined
+    in is part of the stability consensus and is not free to change.
+    """
+    if n_jobs < 1:
+        raise ValueError("n_jobs must be at least 1")
+    workers = min(n_jobs, n_items)
+    with _published_state(**state):
+        if workers <= 1:
+            return [function(index) for index in range(n_items)]
+        context = _fork_context()
+        with ProcessPoolExecutor(max_workers=workers, mp_context=context) as pool:
+            return list(pool.map(function, range(n_items)))
+
+
+def _fit_repeat(index: int) -> ProgramSet:
+    """Fit one repeated estimate of the published sample."""
+    sample_id = _published("sample_id")
+    return NMFProgramEstimator(
+        n_programs=_published("n_programs"),
+        random_state=_published("random_state") + index,
+        max_iter=_published("max_iter"),
+        tol=_published("tol"),
+    ).fit(
+        _published("matrix"),
+        feature_names=_published("feature_names"),
+        sample_id=f"{sample_id}::run_{index}",
+    )
+
+
+def _fit_collection_entry(index: int) -> ProgramResult:
+    """Fit one sample of the published cohort, on its own cells only."""
+    collection: SampleCollection = _published("collection")
+    entry = collection.samples[index]
+    return fit(
+        entry.source,
+        modality=_published("modality"),
+        method=_published("method"),
+        sample_id=entry.sample_id,
+        random_state=_published("random_state"),
+        **_published("fit_kwargs"),
+    )
 
 
 @dataclass(frozen=True)
@@ -297,6 +392,7 @@ def fit(
     remove_ribosomal: bool = False,
     exclude_genes: Sequence[str] = (),
     random_state: int = 0,
+    n_jobs: int = 1,
 ) -> ProgramResult:
     """Discover programs and cell usages from one RNA sample.
 
@@ -320,6 +416,12 @@ def fit(
         asserts that the input holds one sample: if the column contains more
         than one, :class:`APIError` is raised pointing at the cohort entry
         points. Omitting it performs no such check.
+    n_jobs
+        Worker processes used for the ``n_repeats`` estimates. The default of 1
+        runs them serially in this process. Repeated estimates of one sample are
+        independent, so a larger value only shortens wall-clock time: the
+        estimates are combined in the same order either way, and the returned
+        arrays do not depend on it. Requires the ``fork`` start method.
     """
     _validate_workflow(modality, method)
     sample_id = str(sample_id).strip()
@@ -345,10 +447,18 @@ def fit(
     matrix = get_matrix(prepared)
     feature_names = tuple(map(str, prepared.var_names))
     runs = tuple(
-        NMFProgramEstimator(
-            n_programs=n_programs, random_state=random_state + run, max_iter=max_iter, tol=tol
-        ).fit(matrix, feature_names=feature_names, sample_id=f"{sample_id}::run_{run}")
-        for run in range(n_repeats)
+        _map_tasks(
+            _fit_repeat,
+            n_repeats,
+            n_jobs,
+            matrix=matrix,
+            feature_names=feature_names,
+            sample_id=sample_id,
+            n_programs=n_programs,
+            random_state=random_state,
+            max_iter=max_iter,
+            tol=tol,
+        )
     )
     stability = None
     programs = runs[0]
@@ -541,6 +651,7 @@ def _fit_collection(
     n_permutations: int,
     max_redundancy: float | None,
     random_state: int,
+    n_jobs: int,
     fit_kwargs: Mapping[str, object],
 ) -> CohortResult:
     """Fit every sample independently, then quantify recurrence across them.
@@ -556,16 +667,21 @@ def _fit_collection(
     # ID or its position would make renaming or reordering inputs change the
     # programs, which is exactly the coupling between storage and analysis that
     # this design exists to remove.
+    # Each sample is fitted from its own cells only, whether the fits run here
+    # or in a child process. The per-sample fits deliberately receive no
+    # n_jobs: this argument parallelizes samples, and letting it also fan out
+    # inside every sample would multiply the two.
     results = tuple(
-        fit(
-            entry.source,
+        _map_tasks(
+            _fit_collection_entry,
+            collection.n_samples,
+            n_jobs,
+            collection=collection,
             modality=modality,
             method=method,
-            sample_id=entry.sample_id,
             random_state=random_state,
-            **fit_kwargs,  # type: ignore[arg-type]
+            fit_kwargs=dict(fit_kwargs),
         )
-        for entry in collection
     )
     return _reduce(
         ProgramCollection(samples=results),
@@ -598,6 +714,7 @@ def fit_atlas(
     n_permutations: int = 1_000,
     max_redundancy: float | None = None,
     random_state: int = 0,
+    n_jobs: int = 1,
     **fit_kwargs: object,
 ) -> CohortResult:
     """Discover programs independently within each sample of one container.
@@ -630,6 +747,12 @@ def fit_atlas(
         Seed for every per-sample fit and for the matching null. The same seed
         is used for every sample so that renaming or reordering inputs cannot
         change the programs.
+    n_jobs
+        Worker processes used to fit the samples. The default of 1 fits them
+        serially in this process. Samples are independent, so a larger value
+        only shortens wall-clock time; the fits are collected in sample order
+        either way. This is not forwarded to the per-sample fits, which stay
+        serial, so the two levels cannot multiply. Requires ``fork``.
     **fit_kwargs
         Remaining keyword arguments forwarded to :func:`fit` for every sample,
         for example ``layer``, ``n_programs``, ``n_repeats``, and
@@ -660,6 +783,7 @@ def fit_atlas(
         n_permutations=n_permutations,
         max_redundancy=max_redundancy,
         random_state=random_state,
+        n_jobs=n_jobs,
         fit_kwargs=fit_kwargs,
     )
 
@@ -675,6 +799,7 @@ def fit_samples(
     n_permutations: int = 1_000,
     max_redundancy: float | None = None,
     random_state: int = 0,
+    n_jobs: int = 1,
     **fit_kwargs: object,
 ) -> CohortResult:
     """Discover programs independently within each of several containers.
@@ -698,6 +823,12 @@ def fit_samples(
         Seed for every per-sample fit and for the matching null. The same seed
         is used for every sample so that renaming or reordering inputs cannot
         change the programs.
+    n_jobs
+        Worker processes used to fit the samples. The default of 1 fits them
+        serially in this process. Samples are independent, so a larger value
+        only shortens wall-clock time; the fits are collected in sample order
+        either way. This is not forwarded to the per-sample fits, which stay
+        serial, so the two levels cannot multiply. Requires ``fork``.
     **fit_kwargs
         Remaining keyword arguments forwarded to :func:`fit` for every sample.
 
@@ -720,6 +851,7 @@ def fit_samples(
         n_permutations=n_permutations,
         max_redundancy=max_redundancy,
         random_state=random_state,
+        n_jobs=n_jobs,
         fit_kwargs=fit_kwargs,
     )
 

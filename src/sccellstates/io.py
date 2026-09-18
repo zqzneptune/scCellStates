@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import platform
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -30,13 +31,35 @@ _H5AD_SUFFIXES = frozenset({".h5ad", ".h5"})
 _PROJECTION_SCHEMA_VERSION = "1.0"
 
 
+def _resolved_versions() -> dict[str, str | None]:
+    """Versions of the libraries that determine the numbers in an artifact.
+
+    These are read from distribution metadata rather than by importing the
+    libraries, so recording them is free. The declared dependency floors let a
+    different solver be resolved in a different environment, so an artifact says
+    which one actually produced it.
+    """
+    recorded: dict[str, str | None] = {"python_version": platform.python_version()}
+    for distribution in ("numpy", "scipy", "scikit-learn", "anndata"):
+        key = f"{distribution.replace('-', '_')}_version"
+        try:
+            recorded[key] = version(distribution)
+        except PackageNotFoundError:  # pragma: no cover - defensive
+            recorded[key] = None
+    return recorded
+
+
 def _runtime_metadata() -> dict[str, str | None]:
     """Return stable package metadata without depending on a source checkout."""
     try:
         package_version = version("sccellstates")
     except PackageNotFoundError:
-        package_version = "0.1.0"
-    return {"package_version": package_version, "git_commit": None}
+        package_version = "0.1.1"
+    return {
+        "package_version": package_version,
+        "git_commit": None,
+        **_resolved_versions(),
+    }
 
 
 def _require_schema(metadata: Mapping[str, object], expected: str, artifact: str) -> None:
@@ -836,8 +859,9 @@ def save_program_result(
     ``<sample_id>.h5ad`` inside it, which is what lets every sample of a cohort
     be written into one results directory.
 
-    No timestamp and no software version is recorded, so identical inputs
-    produce byte-identical artifacts within one environment.
+    No timestamp is recorded, so identical inputs produce byte-identical
+    artifacts within one environment. The record does carry the resolved package
+    and library versions, which is what identifies that environment.
 
     Parameters
     ----------

@@ -1,3 +1,5 @@
+import pickle
+
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -27,6 +29,30 @@ def test_nmf_is_deterministic_for_dense_and_sparse_inputs(sparse_input: bool) ->
     np.testing.assert_allclose(first.weights, second.weights)
     np.testing.assert_allclose(first.weights.sum(axis=1), 1.0)
     assert not first.weights.flags.writeable
+
+
+def test_program_set_round_trips_through_pickle() -> None:
+    """A fitted sample crosses a process boundary, read-only guarantees intact.
+
+    The parameters mapping is a mapping proxy, which pickle cannot serialize, so
+    this pins the reconstruction path rather than the default dataclass one.
+    """
+    original = sccs.ProgramSet(
+        sample_id="d1",
+        feature_names=("g0", "g1", "g2"),
+        weights=np.array([[0.5, 0.3, 0.2], [0.1, 0.2, 0.7]]),
+        n_cells=12,
+        estimator="nmf",
+        parameters={"n_programs": 2, "random_state": 0},
+    )
+    restored = pickle.loads(pickle.dumps(original))
+    np.testing.assert_array_equal(restored.weights, original.weights)
+    assert restored.feature_names == original.feature_names
+    assert restored.sample_id == original.sample_id
+    assert restored.n_cells == original.n_cells
+    assert restored.estimator == original.estimator
+    assert dict(restored.parameters) == dict(original.parameters)
+    assert not restored.weights.flags.writeable
 
 
 def test_nmf_rejects_negative_values() -> None:

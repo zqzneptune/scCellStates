@@ -707,3 +707,60 @@ def test_aggregate_and_the_cohort_entry_points_share_recurrence_defaults() -> No
             for entry in (sccs.aggregate, sccs.fit_atlas, sccs.fit_samples)
         }
         assert len(set(defaults.values())) == 1, f"{name} defaults disagree: {defaults}"
+
+
+# --- parallel execution ------------------------------------------------------
+
+
+def test_fit_n_jobs_does_not_change_the_result() -> None:
+    """Repeats fitted in child processes must reduce to the same programs.
+
+    Repeated estimates of one sample are independent and are combined in index
+    order, so n_jobs is a scheduling choice and not a modelling one.
+    """
+    adata = _sample(4)
+    options = {"n_programs": 3, "n_repeats": 3, "preprocessing": "identity", "random_state": 0}
+    serial = sccs.fit(adata, sample_id="donor_01", **options)
+    parallel = sccs.fit(adata, sample_id="donor_01", n_jobs=3, **options)
+
+    np.testing.assert_array_equal(serial.programs, parallel.programs)
+    np.testing.assert_array_equal(serial.usages, parallel.usages)
+    assert serial.stability is not None and parallel.stability is not None
+    np.testing.assert_array_equal(
+        serial.stability.matched_similarities, parallel.stability.matched_similarities
+    )
+    np.testing.assert_array_equal(
+        serial.stability.retained_anchor_indices, parallel.stability.retained_anchor_indices
+    )
+    assert serial.provenance == parallel.provenance
+
+
+def test_fit_atlas_n_jobs_does_not_change_the_vocabulary() -> None:
+    """Parallel per-sample fits must still equal the serial cohort reduction."""
+    atlas = _block_atlas()
+    options = {
+        "sample_key": "donor_id",
+        "n_programs": 2,
+        "n_repeats": 2,
+        "preprocessing": "identity",
+        "n_permutations": 20,
+        "random_state": 0,
+    }
+    serial = sccs.fit_atlas(atlas, **options)
+    parallel = sccs.fit_atlas(atlas, n_jobs=2, **options)
+
+    assert serial.vocabulary is not None and parallel.vocabulary is not None
+    np.testing.assert_array_equal(
+        serial.vocabulary.programs.weights, parallel.vocabulary.programs.weights
+    )
+    assert serial.programs.sample_ids == parallel.programs.sample_ids
+    for left, right in zip(serial.programs.samples, parallel.programs.samples, strict=True):
+        np.testing.assert_array_equal(left.programs, right.programs)
+        np.testing.assert_array_equal(left.usages, right.usages)
+    assert serial.provenance["fit_independence"] == "per_sample"
+    assert parallel.provenance["fit_independence"] == "per_sample"
+
+
+def test_n_jobs_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="n_jobs"):
+        sccs.fit(_sample(5), sample_id="donor_01", n_programs=2, n_repeats=1, n_jobs=0)

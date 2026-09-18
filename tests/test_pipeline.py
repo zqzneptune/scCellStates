@@ -80,16 +80,23 @@ def test_tuning_selects_on_validation_and_records_selection() -> None:
         sample_key="sample",
         test_samples=("held",),
         validation_samples=("b",),
-        n_programs=2,
         state_methods=("direct",),
         n_permutations=10,
     )
     result = sccs.tune_pipeline(
         pipeline_adata(sparse_x=False),
-        [sccs.PipelineConfig(**base, random_state=1), sccs.PipelineConfig(**base, random_state=2)],
+        [
+            sccs.PipelineConfig(**base, n_programs=1, random_state=1),
+            sccs.PipelineConfig(**base, n_programs=2, random_state=2),
+        ],
     )
     assert result.reports["tuning"].shape == (2, 2)
     assert result.provenance["tuning"]["selected_candidate"] in {0, 1}
+    scores = result.reports["tuning"]["validation_mean_squared_error"]
+    assert float(scores.max() - scores.min()) > 1e-8
+    assert result.provenance["tuning"]["selection_metric"] == (
+        "program_reconstruction.validation.mean_squared_error"
+    )
 
 
 def test_pipeline_seeds_every_sample_identically(monkeypatch) -> None:

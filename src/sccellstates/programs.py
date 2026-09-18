@@ -76,6 +76,26 @@ class ProgramSet:
         object.__setattr__(self, "weights", weights)
         object.__setattr__(self, "parameters", MappingProxyType(dict(self.parameters)))
 
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        """Rebuild through the constructor so a fitted sample can be pickled.
+
+        ``parameters`` is a mapping proxy, which pickle cannot serialize.
+        Reconstruction therefore goes through ``__init__``, which re-runs
+        ``__post_init__`` and re-establishes the read-only guarantees rather
+        than restoring them from the pickle stream.
+        """
+        return (
+            self.__class__,
+            (
+                self.sample_id,
+                self.feature_names,
+                self.weights,
+                self.n_cells,
+                self.estimator,
+                dict(self.parameters),
+            ),
+        )
+
     @property
     def n_programs(self) -> int:
         """Number of programs in this sample."""
