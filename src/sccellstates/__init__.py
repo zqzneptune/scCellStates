@@ -74,6 +74,7 @@ from sccellstates.programs import (
 from sccellstates.projection import (
     PoissonProjector,
     ProjectionBenchmark,
+    ProjectionError,
     ProjectorSpec,
     RegularizedNNLSProjector,
     SimplexProjector,
@@ -180,6 +181,7 @@ __all__ = [
     "ProgramResultSource",
     "ProjectionResult",
     "ProjectionBenchmark",
+    "ProjectionError",
     "RecurrenceError",
     "RecurrenceResult",
     "RedundancySummary",

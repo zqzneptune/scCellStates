@@ -6,6 +6,7 @@ import json
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -27,6 +28,25 @@ _SUPPORTED_PROGRAM_RESULT_SCHEMAS = frozenset({_PROGRAM_RESULT_SCHEMA_VERSION})
 _PROGRAM_RESULT_KEY = "program_result"
 _H5AD_SUFFIXES = frozenset({".h5ad", ".h5"})
 _PROJECTION_SCHEMA_VERSION = "1.0"
+
+
+def _runtime_metadata() -> dict[str, str | None]:
+    """Return stable package metadata without depending on a source checkout."""
+    try:
+        package_version = version("sccellstates")
+    except PackageNotFoundError:
+        package_version = "0.1.0"
+    return {"package_version": package_version, "git_commit": None}
+
+
+def _require_schema(metadata: Mapping[str, object], expected: str, artifact: str) -> None:
+    if not isinstance(metadata, Mapping):
+        raise InputError(f"malformed {artifact} metadata: expected a JSON object")
+    if metadata.get("schema_version") != expected:
+        raise InputError(
+            f"unsupported {artifact} schema: {metadata.get('schema_version')!r}; "
+            f"this version reads {expected!r}"
+        )
 
 
 class InputError(ValueError):
@@ -341,6 +361,7 @@ def save_program_vocabulary(
         {
             "schema_version": _VOCABULARY_SCHEMA_VERSION,
             "artifact": "program_vocabulary",
+            **_runtime_metadata(),
             "sample_id": programs.sample_id,
             "estimator": programs.estimator,
             "n_programs": programs.n_programs,
@@ -409,6 +430,7 @@ def save_program_vocabulary(
         destination / "provenance.json",
         {
             "schema_version": _VOCABULARY_SCHEMA_VERSION,
+            **_runtime_metadata(),
             "has_recurrence_evidence": recurrence is not None,
             "parameters": dict(vocabulary.parameters),
             "recurrence_pairs": pair_records,
@@ -443,6 +465,9 @@ def load_program_vocabulary(path: str | Path) -> ProgramVocabulary:
     if not root.is_dir():
         raise InputError(f"vocabulary path is not a directory: {root}")
     metadata = _read_json(root / "metadata.json")
+    _require_schema(metadata, _VOCABULARY_SCHEMA_VERSION, "program vocabulary")
+    if metadata.get("artifact") != "program_vocabulary":
+        raise InputError(f"{root} is not a program vocabulary artifact")
     provenance = _read_json(root / "provenance.json")
     members_payload = _read_json(root / "members.json")
     try:
@@ -466,9 +491,7 @@ def load_program_vocabulary(path: str | Path) -> ProgramVocabulary:
             anchor_program_index=int(entry["anchor_program_index"]),
             sample_ids=tuple(map(str, entry["sample_ids"])),
             program_indices=tuple(int(index) for index in entry["program_indices"]),
-            similarities_to_anchor=tuple(
-                float(value) for value in entry["similarities_to_anchor"]
-            ),
+            similarities_to_anchor=tuple(float(value) for value in entry["similarities_to_anchor"]),
         )
         for entry in members_payload["members"]
     )
@@ -543,12 +566,16 @@ def save_projector(projector: object, path: str | Path, *, overwrite: bool = Fal
     metadata = {
         "schema_version": _PROJECTION_SCHEMA_VERSION,
         "artifact": "fitted_projector",
+        **_runtime_metadata(),
         "projector_name": projector.spec.name,
         "parameters": to_jsonable(projector.get_params()),
         "vocabulary": vocabulary,
     }
     (root / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
-    np.savez_compressed(root / "programs.npz", weights=weights)
+    state = projector.get_state() if hasattr(projector, "get_state") else {}
+    metadata["state_keys"] = sorted(state)
+    (root / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    np.savez_compressed(root / "programs.npz", weights=weights, **state)
     return root
 
 
@@ -560,14 +587,20 @@ def load_projector(path: str | Path):
     if not root.is_dir():
         raise InputError(f"projector path is not a directory: {root}")
     metadata = _read_json(root / "metadata.json")
+    _require_schema(metadata, _PROJECTION_SCHEMA_VERSION, "projector")
     if metadata.get("artifact") != "fitted_projector":
         raise InputError(f"{root} is not a fitted projector artifact")
-    if metadata.get("schema_version") != _PROJECTION_SCHEMA_VERSION:
-        raise InputError(f"unsupported projector schema: {metadata.get('schema_version')!r}")
     try:
         with np.load(root / "programs.npz", allow_pickle=False) as arrays:
             programs = _program_set_from_payload(metadata["vocabulary"], arrays["weights"])
-        return make_projector(str(metadata["projector_name"]), programs, **metadata["parameters"])
+            state_keys = tuple(map(str, metadata.get("state_keys", [])))
+            state = {key: arrays[key] for key in state_keys}
+        projector = make_projector(
+            str(metadata["projector_name"]), programs, **metadata["parameters"]
+        )
+        if state and hasattr(projector, "set_state"):
+            projector.set_state(state)
+        return projector
     except FileNotFoundError:
         raise InputError(f"{root} is missing projector metadata or arrays") from None
     except (KeyError, TypeError, ValueError) as error:
@@ -597,6 +630,7 @@ def save_state_result(result: object, path: str | Path, *, overwrite: bool = Fal
     metadata = {
         "schema_version": _PROJECTION_SCHEMA_VERSION,
         "artifact": "state_result",
+        **_runtime_metadata(),
         "cell_names": list(result.cell_names),
         "sample_id": result.sample_id,
         "projector_name": result.projector_name,
@@ -622,6 +656,7 @@ def load_state_result(path: str | Path):
     if not root.is_dir():
         raise InputError(f"state result path is not a directory: {root}")
     metadata = _read_json(root / "metadata.json")
+    _require_schema(metadata, _PROJECTION_SCHEMA_VERSION, "state result")
     if metadata.get("artifact") != "state_result":
         raise InputError(f"{root} is not a state result artifact")
     try:
@@ -632,9 +667,11 @@ def load_state_result(path: str | Path):
                 for name in ("reconstructed_features", "uncertainty")
             }
             return StateResult(
-                usages=arrays["usages"], normalized_states=arrays["normalized_states"],
+                usages=arrays["usages"],
+                normalized_states=arrays["normalized_states"],
                 cell_names=tuple(map(str, metadata["cell_names"])),
-                sample_id=str(metadata["sample_id"]), vocabulary=vocabulary,
+                sample_id=str(metadata["sample_id"]),
+                vocabulary=vocabulary,
                 reconstructed_features=optional["reconstructed_features"],
                 projection_error=arrays["projection_error"],
                 relative_error=arrays["relative_error"],
@@ -664,8 +701,12 @@ def save_projection_benchmark(
     if not isinstance(benchmark, ProjectionBenchmark):
         raise TypeError("benchmark must be a ProjectionBenchmark")
     root = _projection_root(path, overwrite=overwrite)
-    metadata = {"schema_version": _PROJECTION_SCHEMA_VERSION, "artifact": "projection_benchmark",
-                "methods": list(benchmark.methods)}
+    metadata = {
+        "schema_version": _PROJECTION_SCHEMA_VERSION,
+        "artifact": "projection_benchmark",
+        **_runtime_metadata(),
+        "methods": list(benchmark.methods),
+    }
     (root / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     for method in benchmark.methods:
         for index, result in enumerate(benchmark.results[method]):
@@ -679,6 +720,7 @@ def load_projection_benchmark(path: str | Path):
 
     root = Path(path)
     metadata = _read_json(root / "metadata.json")
+    _require_schema(metadata, _PROJECTION_SCHEMA_VERSION, "projection benchmark")
     if metadata.get("artifact") != "projection_benchmark":
         raise InputError(f"{root} is not a projection benchmark artifact")
     methods = tuple(map(str, metadata["methods"]))
@@ -698,9 +740,7 @@ def _program_result_envelope(adata: ad.AnnData, *, name: str) -> Mapping[str, An
     """Return the stored program-result record, or explain what the file holds."""
     existing = adata.uns.get("sccellstates")
     if not isinstance(existing, Mapping):
-        raise InputError(
-            f"{name} carries no sccellstates metadata, so it is not a program result"
-        )
+        raise InputError(f"{name} carries no sccellstates metadata, so it is not a program result")
     record = existing.get(_PROGRAM_RESULT_KEY)
     if record is None:
         if "program_vocabulary" in existing:
@@ -761,9 +801,7 @@ def _load_stability(
             run_ids=tuple(map(str, record["run_ids"])),
             anchor_run_id=str(record["anchor_run_id"]),
             matched_similarities=np.asarray(record["matched_similarities"], dtype=np.float64),
-            retained_anchor_indices=np.asarray(
-                record["retained_anchor_indices"], dtype=np.int64
-            ),
+            retained_anchor_indices=np.asarray(record["retained_anchor_indices"], dtype=np.int64),
             min_similarity=float(record["min_similarity"]),
         )
     except KeyError as error:
@@ -861,6 +899,7 @@ def save_program_result(
     artifact.obsm["X_sccs_programs"] = np.ascontiguousarray(result.usages)
     artifact.uns["sccellstates"] = {
         "schema_version": _PROGRAM_RESULT_SCHEMA_VERSION,
+        **_runtime_metadata(),
         _PROGRAM_RESULT_KEY: {
             "schema_version": _PROGRAM_RESULT_SCHEMA_VERSION,
             "artifact": _PROGRAM_RESULT_KEY,
@@ -900,9 +939,7 @@ def _stability_record(stability: ProgramStabilityFit | None) -> dict[str, object
         "run_ids": list(stability.run_ids),
         "anchor_run_id": stability.anchor_run_id,
         "matched_similarities": np.asarray(stability.matched_similarities, dtype=np.float64),
-        "retained_anchor_indices": np.asarray(
-            stability.retained_anchor_indices, dtype=np.int64
-        ),
+        "retained_anchor_indices": np.asarray(stability.retained_anchor_indices, dtype=np.int64),
         "min_similarity": float(stability.min_similarity),
     }
 

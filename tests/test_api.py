@@ -467,8 +467,7 @@ def test_fit_atlas_equals_fit_then_save_then_aggregate(tmp_path) -> None:
         from_atlas.vocabulary.programs.weights, aggregated.vocabulary.programs.weights
     )
     assert (
-        from_atlas.vocabulary.programs.feature_names
-        == aggregated.vocabulary.programs.feature_names
+        from_atlas.vocabulary.programs.feature_names == aggregated.vocabulary.programs.feature_names
     )
     assert from_atlas.vocabulary.support_counts == aggregated.vocabulary.support_counts
     assert [
@@ -479,8 +478,7 @@ def test_fit_atlas_equals_fit_then_save_then_aggregate(tmp_path) -> None:
         for member in aggregated.vocabulary.members
     ]
     assert (
-        from_atlas.vocabulary.dropped_anchor_indices
-        == aggregated.vocabulary.dropped_anchor_indices
+        from_atlas.vocabulary.dropped_anchor_indices == aggregated.vocabulary.dropped_anchor_indices
     )
 
     left, right = from_atlas.recurrence, aggregated.recurrence
@@ -490,11 +488,9 @@ def test_fit_atlas_equals_fit_then_save_then_aggregate(tmp_path) -> None:
     assert left.overlap.as_record() == right.overlap.as_record()
     assert left.assignments == right.assignments
     assert [
-        (summary.sample_id, summary.max_absolute_similarity)
-        for summary in left.sample_redundancy
+        (summary.sample_id, summary.max_absolute_similarity) for summary in left.sample_redundancy
     ] == [
-        (summary.sample_id, summary.max_absolute_similarity)
-        for summary in right.sample_redundancy
+        (summary.sample_id, summary.max_absolute_similarity) for summary in right.sample_redundancy
     ]
     # Null scores pin the order the seeded generator is consumed in, which
     # comparing weights alone would not catch.
@@ -539,9 +535,7 @@ def test_aggregate_names_samples_from_artifact_metadata_not_file_names(tmp_path)
     """A result carries its own sample ID, so file names cannot rename it."""
     atlas = _block_atlas()
     directory = tmp_path / "results"
-    results = _saved_donors(
-        atlas, directory, n_programs=2, n_repeats=1, preprocessing="identity"
-    )
+    results = _saved_donors(atlas, directory, n_programs=2, n_repeats=1, preprocessing="identity")
     for result, scrambled in zip(results, ["zzz.h5ad", "aaa.h5ad"], strict=True):
         (directory / f"{result.sample_id}.h5ad").rename(directory / scrambled)
 
@@ -555,9 +549,7 @@ def test_aggregate_accepts_a_directory_a_sequence_a_mapping_and_loaded_results(
 ) -> None:
     atlas = _block_atlas()
     directory = tmp_path / "results"
-    results = _saved_donors(
-        atlas, directory, n_programs=2, n_repeats=1, preprocessing="identity"
-    )
+    results = _saved_donors(atlas, directory, n_programs=2, n_repeats=1, preprocessing="identity")
     options = _aggregate_options()
     paths = sorted(directory.glob("*.h5ad"))
 
@@ -573,10 +565,7 @@ def test_aggregate_accepts_a_directory_a_sequence_a_mapping_and_loaded_results(
         np.testing.assert_array_equal(
             from_directory.vocabulary.programs.weights, other.vocabulary.programs.weights
         )
-        assert (
-            from_directory.recurrence.reference_sample_id
-            == other.recurrence.reference_sample_id
-        )
+        assert from_directory.recurrence.reference_sample_id == other.recurrence.reference_sample_id
 
 
 def test_aggregate_is_deterministic(tmp_path) -> None:
@@ -600,9 +589,7 @@ def test_aggregate_is_deterministic(tmp_path) -> None:
 def test_aggregate_rejects_duplicate_sample_ids(tmp_path) -> None:
     atlas = _block_atlas()
     directory = tmp_path / "results"
-    results = _saved_donors(
-        atlas, directory, n_programs=2, n_repeats=1, preprocessing="identity"
-    )
+    results = _saved_donors(atlas, directory, n_programs=2, n_repeats=1, preprocessing="identity")
     # Same artifact under a second name is still the same sample.
     (directory / f"{results[0].sample_id}.h5ad").rename(directory / "copy.h5ad")
     sccs.save_program_result(results[0], directory / "again.h5ad")
@@ -646,9 +633,7 @@ def test_aggregate_rejects_incompatible_results(
 def test_aggregate_rejects_a_mapping_key_that_disagrees_with_the_artifact(tmp_path) -> None:
     atlas = _block_atlas()
     directory = tmp_path / "results"
-    results = _saved_donors(
-        atlas, directory, n_programs=2, n_repeats=1, preprocessing="identity"
-    )
+    results = _saved_donors(atlas, directory, n_programs=2, n_repeats=1, preprocessing="identity")
 
     with pytest.raises(sccs.APIError, match="does not match the sample ID"):
         sccs.aggregate({"not_the_sample": results[0]}, **_aggregate_options())
@@ -674,9 +659,7 @@ def test_aggregate_reports_insufficient_feature_overlap(tmp_path) -> None:
 def test_aggregate_requires_at_least_two_results(tmp_path) -> None:
     atlas = _block_atlas()
     directory = tmp_path / "results"
-    results = _saved_donors(
-        atlas, directory, n_programs=2, n_repeats=1, preprocessing="identity"
-    )
+    results = _saved_donors(atlas, directory, n_programs=2, n_repeats=1, preprocessing="identity")
 
     with pytest.raises(sccs.APIError, match="at least two biological samples"):
         sccs.aggregate(results[0], **_aggregate_options())

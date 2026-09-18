@@ -150,9 +150,7 @@ def _cohort_summary(result: object) -> dict[str, object]:
             "support_counts": list(vocabulary.support_counts),
             "max_redundancy": vocabulary.max_redundancy,
             "dropped_anchor_indices": list(vocabulary.dropped_anchor_indices),
-            "mean_absolute_similarity": (
-                vocabulary.vocabulary_redundancy.mean_absolute_similarity
-            ),
+            "mean_absolute_similarity": (vocabulary.vocabulary_redundancy.mean_absolute_similarity),
             "max_absolute_similarity": vocabulary.vocabulary_redundancy.max_absolute_similarity,
         },
     }
@@ -287,8 +285,12 @@ def _project(args: argparse.Namespace) -> int:
     vocabulary = load_program_vocabulary(args.vocabulary)
     method = args.method
     result = project(
-        Path(args.input), vocabulary, layer=args.layer, preprocessing=args.preprocessing,
-        method=method, sample_id=args.sample_id or Path(args.input).stem,
+        Path(args.input),
+        vocabulary,
+        layer=args.layer,
+        preprocessing=args.preprocessing,
+        method=method,
+        sample_id=args.sample_id or Path(args.input).stem,
         **_projector_options(args, method),
     )
     destination = save_state_result(result, args.output, overwrite=args.overwrite)
@@ -301,14 +303,16 @@ def _benchmark_table(benchmark: object) -> pd.DataFrame:
     rows = []
     for method in benchmark.methods:
         for result in benchmark.results[method]:
-            rows.append({
-                "method": method,
-                "sample": result.sample_id,
-                "projection_error": float(result.projection_error.mean()),
-                "state_sparsity": float(np.mean(result.normalized_states == 0)),
-                "feature_coverage": result.feature_coverage,
-                "success": True,
-            })
+            rows.append(
+                {
+                    "method": method,
+                    "sample": result.sample_id,
+                    "projection_error": float(result.projection_error.mean()),
+                    "state_sparsity": float(np.mean(result.normalized_states == 0)),
+                    "feature_coverage": result.feature_coverage,
+                    "success": True,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -318,8 +322,12 @@ def _compare(args: argparse.Namespace) -> int:
     options = {method: _projector_options(args, method) for method in methods}
     samples = {Path(path).stem: Path(path) for path in args.input}
     benchmark = compare_projectors(
-        samples, vocabulary, methods=methods,
-        layer=args.layer, preprocessing=args.preprocessing, projector_options=options,
+        samples,
+        vocabulary,
+        methods=methods,
+        layer=args.layer,
+        preprocessing=args.preprocessing,
+        projector_options=options,
     )
     destination = save_projection_benchmark(benchmark, args.output, overwrite=args.overwrite)
     _benchmark_table(benchmark).to_csv(destination / "comparison.tsv", sep="\t", index=False)

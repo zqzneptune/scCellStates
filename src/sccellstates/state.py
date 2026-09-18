@@ -363,9 +363,10 @@ class CountResidualProgramScorer:
         inverse_sqrt_rates = 1.0 / np.sqrt(self.rates_)
         weighted_counts = matrix @ (self.vocabulary.weights.T * inverse_sqrt_rates[:, None])
         scores = _dense_activities(weighted_counts) / np.sqrt(safe_depths[:, None])
-        scores -= np.sqrt(safe_depths[:, None]) * (
-            self.vocabulary.weights @ np.sqrt(self.rates_)[:, None]
-        ).T
+        scores -= (
+            np.sqrt(safe_depths[:, None])
+            * (self.vocabulary.weights @ np.sqrt(self.rates_)[:, None]).T
+        )
         scores[depths == 0, :] = 0.0
         return _dense_activities(scores)
 

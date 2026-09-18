@@ -303,7 +303,7 @@ def match_programs(
 ) -> MatchResult:
     """Optimally match programs and compare with random one-to-one assignments."""
     if n_permutations < 1:
-        raise ValueError("n_permutations must be at least 1")
+        raise RecurrenceError("n_permutations must be at least 1")
     similarities = program_similarity(reference, query)
     rows, columns = linear_sum_assignment(similarities, maximize=True)
     matched = similarities[rows, columns]
@@ -400,7 +400,7 @@ def _ordered_sets(program_sets: tuple[ProgramSet, ...]) -> tuple[ProgramSet, ...
 
 def _validate_min_samples(min_samples: int, n_samples: int) -> None:
     if not 2 <= min_samples <= n_samples:
-        raise ValueError("min_samples must be between 2 and the number of training samples")
+        raise RecurrenceError("min_samples must be between 2 and the number of training samples")
 
 
 def compute_recurrence(
@@ -448,9 +448,9 @@ def compute_recurrence(
     """
     ordered_sets = _ordered_sets(program_sets)
     if not -1 <= min_similarity <= 1:
-        raise ValueError("min_similarity must be between -1 and 1")
+        raise RecurrenceError("min_similarity must be between -1 and 1")
     if n_permutations < 1:
-        raise ValueError("n_permutations must be at least 1")
+        raise RecurrenceError("n_permutations must be at least 1")
 
     sample_ids = tuple(item.sample_id for item in ordered_sets)
     overlap = feature_overlap(ordered_sets)
@@ -554,7 +554,7 @@ def build_vocabulary(
         raise TypeError("recurrence must be a RecurrenceResult")
     _validate_min_samples(min_samples, recurrence.n_samples)
     if max_redundancy is not None and not 0 <= max_redundancy <= 1:
-        raise ValueError("max_redundancy must be between 0 and 1")
+        raise RecurrenceError("max_redundancy must be between 0 and 1")
 
     reference = next(
         item for item in recurrence.program_sets if item.sample_id == recurrence.reference_sample_id
@@ -633,8 +633,11 @@ def build_vocabulary(
             "n_permutations": recurrence.n_permutations,
             "random_state": recurrence.random_state,
             "preprocessing": next(
-                (item.parameters["preprocessing"] for item in recurrence.program_sets
-                 if "preprocessing" in item.parameters),
+                (
+                    item.parameters["preprocessing"]
+                    for item in recurrence.program_sets
+                    if "preprocessing" in item.parameters
+                ),
                 None,
             ),
         },

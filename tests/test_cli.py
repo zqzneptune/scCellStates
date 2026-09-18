@@ -23,31 +23,34 @@ def test_run_accepts_atlas_h5ad_and_writes_dedicated_results(tmp_path) -> None:
     output_path = tmp_path / "results" / "run_a"
     atlas.write_h5ad(input_path)
 
-    assert main(
-        [
-            "run",
-            "--input",
-            str(input_path),
-            "--output",
-            str(output_path),
-            "--sample-key",
-            "donor",
-            "--validation-samples",
-            "b",
-            "--test-samples",
-            "held",
-            "--n-top-genes",
-            "4",
-            "--n-programs",
-            "2",
-            "--n-permutations",
-            "5",
-            "--state-methods",
-            "direct",
-            "--remove-mitochondrial",
-            "--remove-ribosomal",
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "run",
+                "--input",
+                str(input_path),
+                "--output",
+                str(output_path),
+                "--sample-key",
+                "donor",
+                "--validation-samples",
+                "b",
+                "--test-samples",
+                "held",
+                "--n-top-genes",
+                "4",
+                "--n-programs",
+                "2",
+                "--n-permutations",
+                "5",
+                "--state-methods",
+                "direct",
+                "--remove-mitochondrial",
+                "--remove-ribosomal",
+            ]
+        )
+        == 0
+    )
     assert (output_path / "candidate.h5ad").exists()
     assert (output_path / "run.json").exists()
 
@@ -66,9 +69,7 @@ def _cohort_atlas() -> ad.AnnData:
         labels.extend([donor] * n_cells)
     return ad.AnnData(
         X=sparse.csr_matrix(np.vstack(rows)),
-        obs=pd.DataFrame(
-            {"donor": labels}, index=[f"cell_{i}" for i in range(n_cells * 3)]
-        ),
+        obs=pd.DataFrame({"donor": labels}, index=[f"cell_{i}" for i in range(n_cells * 3)]),
         var=pd.DataFrame(index=[f"g{i}" for i in range(12)]),
     )
 

@@ -60,7 +60,7 @@ def test_legacy_and_compressed_mtx_directory(tmp_path):
         if compressed:
             with gzip.open(matrix_path, "wb") as handle:
                 mmwrite(handle, values)
-            (directory / "genes.tsv.gz").write_bytes(gzip.compress(b"g1\tG1\n" b"g2\tG2\n"))
+            (directory / "genes.tsv.gz").write_bytes(gzip.compress(b"g1\tG1\ng2\tG2\n"))
             (directory / "barcodes.tsv.gz").write_bytes(gzip.compress(b"c1\nc2\n"))
         else:
             mmwrite(matrix_path, values)
@@ -86,7 +86,7 @@ def test_nnls_projection_recovers_normalized_mixtures_and_reports_alignment():
         var=pd.DataFrame(index=["g3", "g1", "g2", "extra"]),
     )
     result = sccs.project(adata, vocabulary, method="nnls", preprocessing="identity")
-    np.testing.assert_allclose(result.states, [[.25, .25, .5], [1, 0, 0]])
+    np.testing.assert_allclose(result.states, [[0.25, 0.25, 0.5], [1, 0, 0]])
     np.testing.assert_allclose(result.usages.sum(axis=1), [4, 3])
     assert result.feature_coverage == 1
     assert result.extra_features == ("extra",)
@@ -96,12 +96,16 @@ def test_nnls_projection_recovers_normalized_mixtures_and_reports_alignment():
 
 def test_nnls_projection_missing_features_and_incompatible_scale():
     vocabulary = sccs.ProgramSet(
-        sample_id="v1", feature_names=("g1", "g2"), weights=np.array([[1, 0], [0, 1]]),
-        n_cells=1, estimator="synthetic", parameters={"preprocessing": "library_size_log1p"},
+        sample_id="v1",
+        feature_names=("g1", "g2"),
+        weights=np.array([[1, 0], [0, 1]]),
+        n_cells=1,
+        estimator="synthetic",
+        parameters={"preprocessing": "library_size_log1p"},
     )
     adata = ad.AnnData(X=sparse.csr_matrix([[2.0]]), var=pd.DataFrame(index=["g1"]))
     with np.testing.assert_raises_regex(sccs.APIError, "incompatible"):
         sccs.project(adata, vocabulary, method="nnls", preprocessing="identity")
     result = sccs.project(adata, vocabulary, method="nnls", preprocessing="library_size_log1p")
     assert result.missing_features == ("g2",)
-    assert result.feature_coverage == .5
+    assert result.feature_coverage == 0.5

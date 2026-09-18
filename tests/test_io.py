@@ -147,9 +147,7 @@ def test_frozen_vocabulary_keeps_links_to_member_feature_axes(tmp_path) -> None:
     feature_map = json.loads((destination / "feature_map.json").read_text())
     assert feature_map["consensus_features"] == list(vocabulary.programs.feature_names)
     assert set(feature_map["sample_features"]) == set(vocabulary.training_sample_ids)
-    assert feature_map["sample_features"]["d0"] == list(
-        recurrence.program_sets[0].feature_names
-    )
+    assert feature_map["sample_features"]["d0"] == list(recurrence.program_sets[0].feature_names)
     # A consensus feature's position in each member axis is derivable, not stored.
     for sample_id, axis in feature_map["sample_features"].items():
         indices = [axis.index(name) for name in feature_map["consensus_features"]]
@@ -260,9 +258,7 @@ def _program_result(*, sample_id: str = "donor_1", stability: bool = True) -> sc
         feature_names=features,
         sample_id=sample_id,
         selected_K=3,
-        stability=sccs.stabilize_programs(program_sets, sample_id=sample_id)
-        if stability
-        else None,
+        stability=sccs.stabilize_programs(program_sets, sample_id=sample_id) if stability else None,
         provenance={
             "schema_version": "1.0",
             "workflow": "single_sample_program_discovery",
@@ -483,6 +479,26 @@ def test_loading_rejects_an_unsupported_schema_version(tmp_path) -> None:
 
     with pytest.raises(sccs.InputError, match="schema_version"):
         sccs.load_program_result(destination)
+
+
+def test_projection_artifacts_record_and_validate_schema(tmp_path) -> None:
+    vocabulary = sccs.ProgramSet(
+        sample_id="frozen",
+        feature_names=("g1", "g2", "g3"),
+        weights=np.eye(3),
+        n_cells=4,
+        estimator="test",
+    )
+    result = sccs.project(example_adata(), vocabulary, method="nnls")
+    destination = sccs.save_state_result(result, tmp_path / "state")
+    metadata = json.loads((destination / "metadata.json").read_text())
+    assert metadata["schema_version"] == "1.0"
+    assert metadata["package_version"] == sccs.__version__
+    assert "git_commit" in metadata
+    metadata["schema_version"] = "99.0"
+    (destination / "metadata.json").write_text(json.dumps(metadata))
+    with pytest.raises(sccs.InputError, match="unsupported state result schema"):
+        sccs.load_state_result(destination)
 
 
 def test_loading_rejects_inconsistent_axes(tmp_path) -> None:

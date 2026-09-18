@@ -8,6 +8,7 @@ from __future__ import annotations
 import numpy as np
 
 from sccellstates.projection.base import (
+    ProjectionError,
     ProjectorSpec,
     StateError,
     StateProjector,
@@ -24,7 +25,7 @@ class PoissonProjector(StateProjector):
     def __init__(self, vocabulary, *, max_iter: int = 1_000, tol: float = 1e-8):
         super().__init__(vocabulary)
         if max_iter < 1 or tol <= 0 or not np.isfinite(tol):
-            raise ValueError("max_iter must be positive and tol must be finite and positive")
+            raise ProjectionError("max_iter must be positive and tol must be finite and positive")
         self.max_iter = int(max_iter)
         self.tol = float(tol)
 
@@ -56,9 +57,19 @@ class PoissonProjector(StateProjector):
                 break
             proportions = updated
         usages = proportions * depths[:, None]
-        return make_result(adata, matrix, basis, usages, self.vocabulary, present, missing, extra,
-                           sample_id=sample_id, projector_name=self.spec.name,
-                           parameters=self.get_params())
+        return make_result(
+            adata,
+            matrix,
+            basis,
+            usages,
+            self.vocabulary,
+            present,
+            missing,
+            extra,
+            sample_id=sample_id,
+            projector_name=self.spec.name,
+            parameters=self.get_params(),
+        )
 
     def get_params(self):
         return {"max_iter": self.max_iter, "tol": self.tol}

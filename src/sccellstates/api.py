@@ -268,9 +268,7 @@ def _prepare_single_sample(
         transformed = matrix
     elif preprocessing == "library_size_log1p":
         preprocessor = LibrarySizeLog1p()
-        transformed = preprocessor.fit(
-            matrix, np.ones(result.n_obs, dtype=bool)
-        ).transform(matrix)
+        transformed = preprocessor.fit(matrix, np.ones(result.n_obs, dtype=bool)).transform(matrix)
     else:
         raise APIError("preprocessing must be 'identity' or 'library_size_log1p'")
     result.X = transformed
@@ -349,9 +347,7 @@ def fit(
     runs = tuple(
         NMFProgramEstimator(
             n_programs=n_programs, random_state=random_state + run, max_iter=max_iter, tol=tol
-        ).fit(
-            matrix, feature_names=feature_names, sample_id=f"{sample_id}::run_{run}"
-        )
+        ).fit(matrix, feature_names=feature_names, sample_id=f"{sample_id}::run_{run}")
         for run in range(n_repeats)
     )
     stability = None
@@ -375,9 +371,7 @@ def fit(
         "random_state": random_state,
         "max_iter": max_iter,
         "tol": tol,
-        "fit_diagnostics": {
-            str(index): dict(run.parameters) for index, run in enumerate(runs)
-        },
+        "fit_diagnostics": {str(index): dict(run.parameters) for index, run in enumerate(runs)},
         "effective_K": programs.n_programs,
         "selected_K": programs.n_programs,
         "input": dict(prepared.uns.get("sccellstates_input", {})),
@@ -716,9 +710,7 @@ def fit_samples(
     _validate_workflow(modality, method)
     if "sample_id" in fit_kwargs:
         raise APIError("fit_samples() names samples from the inputs; remove sample_id")
-    collection = samples_from_sources(
-        sources, sample_key=sample_key, layer=_layer_of(fit_kwargs)
-    )
+    collection = samples_from_sources(sources, sample_key=sample_key, layer=_layer_of(fit_kwargs))
     return _fit_collection(
         collection,
         modality=modality,
@@ -913,9 +905,7 @@ def aggregate(
     sample_ids = [result.sample_id for result in loaded]
     duplicates = sorted({name for name in sample_ids if sample_ids.count(name) > 1})
     if duplicates:
-        raise APIError(
-            f"program result sample IDs must be unique, but these repeat: {duplicates}"
-        )
+        raise APIError(f"program result sample IDs must be unique, but these repeat: {duplicates}")
     modality, method = _require_compatible_results(loaded)
     # Sorted by sample ID so the returned collection and its provenance do not
     # depend on directory listing order or on the order results were passed in.
@@ -936,9 +926,7 @@ def aggregate(
             "n_samples": len(ordered),
             "n_repeats": ordered[0].provenance.get("n_repeats"),
             "preprocessing": ordered[0].provenance.get("preprocessing"),
-            "selected_K_by_sample": {
-                result.sample_id: result.selected_K for result in ordered
-            },
+            "selected_K_by_sample": {result.sample_id: result.selected_K for result in ordered},
         },
     )
 
@@ -1035,7 +1023,9 @@ def project(
             cell_names=tuple(map(str, prepared.obs_names)),
             vocabulary=programs,
             provenance={
-                "workflow": "fixed_vocabulary_projection", "method": method, "layer": layer
+                "workflow": "fixed_vocabulary_projection",
+                "method": method,
+                "layer": layer,
             },
         )
     if method == "nnls":
@@ -1054,6 +1044,11 @@ def project(
         )
     try:
         projector = make_projector(method, programs, **projector_kwargs)
+        if method == "neural":
+            # Convenience path for one-input comparisons.  Scientific
+            # benchmarking should fit this projector on discovery samples and
+            # call transform on held-out samples explicitly.
+            projector.fit(X=prepared, layer=None)
     except (TypeError, ValueError) as error:
         raise APIError(str(error)) from error
     return projector.transform(prepared, layer=None, sample_id=sample_id)
@@ -1085,16 +1080,23 @@ def compare_projectors(
         ordered_samples = tuple((None, sample) for sample in samples)
     if not ordered_samples:
         raise APIError("samples must contain at least one input")
-    options = {} if projector_options is None else {
-        str(name): dict(values) for name, values in projector_options.items()
-    }
+    options = (
+        {}
+        if projector_options is None
+        else {str(name): dict(values) for name, values in projector_options.items()}
+    )
     results = {
         method: tuple(
             project(
-                sample, vocabulary, modality=modality, layer=layer,
-                preprocessing=preprocessing, method=method,
+                sample,
+                vocabulary,
+                modality=modality,
+                layer=layer,
+                preprocessing=preprocessing,
+                method=method,
                 sample_id=sample_id or "projection",
-                **projector_kwargs, **options.get(method, {}),
+                **projector_kwargs,
+                **options.get(method, {}),
             )
             for sample_id, sample in ordered_samples
         )

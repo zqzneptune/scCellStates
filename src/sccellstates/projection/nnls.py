@@ -31,9 +31,19 @@ class NNLSProjector(StateProjector):
         for row in range(adata.n_obs):
             values = row_values(matrix, row)
             usages[row], _ = nnls(basis, values)
-        result = make_result(adata, matrix, basis, usages, self.vocabulary, present, missing, extra,
-                             sample_id=sample_id, projector_name=self.spec.name,
-                             parameters=self.get_params())
+        result = make_result(
+            adata,
+            matrix,
+            basis,
+            usages,
+            self.vocabulary,
+            present,
+            missing,
+            extra,
+            sample_id=sample_id,
+            projector_name=self.spec.name,
+            parameters=self.get_params(),
+        )
         warnings = list(result.warnings)
         if missing:
             warnings.append(f"{len(missing)} vocabulary features are missing")

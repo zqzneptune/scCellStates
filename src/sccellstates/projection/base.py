@@ -14,6 +14,10 @@ from sccellstates.programs import ProgramSet
 from sccellstates.state import StateError
 
 
+class ProjectionError(StateError):
+    """Raised when a fixed-vocabulary projection cannot be configured or solved."""
+
+
 @dataclass(frozen=True)
 class ProjectorSpec:
     """Declared capabilities of one state projector."""
@@ -130,22 +134,22 @@ def aligned_matrix(adata: ad.AnnData, vocabulary: ProgramSet, *, layer: str | No
     if not isinstance(adata, ad.AnnData):
         raise TypeError("adata must be an anndata.AnnData object")
     if not adata.var_names.is_unique:
-        raise StateError("adata.var_names must be unique")
+        raise ProjectionError("adata.var_names must be unique")
     matrix = get_matrix(adata, layer=layer)
     values = matrix.data if sparse.issparse(matrix) else np.asarray(matrix)
     if not np.issubdtype(values.dtype, np.number) or not np.isfinite(values).all():
-        raise StateError("selected expression matrix must be finite and numeric")
+        raise ProjectionError("selected expression matrix must be finite and numeric")
     if (values < 0).any():
-        raise StateError("selected expression matrix must be nonnegative")
+        raise ProjectionError("selected expression matrix must be nonnegative")
+    if np.any(np.asarray(matrix.sum(axis=1)).ravel() <= 0):
+        raise ProjectionError("projection input contains zero-count cells")
     lookup = {str(name): i for i, name in enumerate(adata.var_names)}
     present = tuple(name for name in vocabulary.feature_names if name in lookup)
     if not present:
-        raise StateError("none of the vocabulary features are present in adata.var_names")
+        raise ProjectionError("none of the vocabulary features are present in adata.var_names")
     indices = np.asarray([lookup[name] for name in present], dtype=np.int64)
     vocabulary_lookup = {name: i for i, name in enumerate(vocabulary.feature_names)}
-    weight_indices = np.asarray(
-        [vocabulary_lookup[name] for name in present], dtype=np.int64
-    )
+    weight_indices = np.asarray([vocabulary_lookup[name] for name in present], dtype=np.int64)
     return (
         matrix[:, indices],
         vocabulary.weights[:, weight_indices].T,
@@ -199,14 +203,21 @@ def make_result(
         usages, totals[:, None], out=np.zeros_like(usages), where=totals[:, None] > 0
     )
     return StateResult(
-        usages=np.asarray(usages, dtype=np.float64), normalized_states=states,
+        usages=np.asarray(usages, dtype=np.float64),
+        normalized_states=states,
         cell_names=tuple(map(str, adata.obs_names)),
-        sample_id=str(sample_id), vocabulary=vocabulary,
+        sample_id=str(sample_id),
+        vocabulary=vocabulary,
         reconstructed_features=reconstructed if reconstructed is not None else reconstructed_values,
         projection_error=errors,
         relative_error=relative,
         feature_coverage=len(present) / vocabulary.n_features,
-        observed_feature_coverage=coverage, uncertainty=None, projector_name=projector_name,
-        projector_version="0.1", parameters=dict(parameters), vocabulary_id=vocabulary.sample_id,
-        missing_features=missing, extra_features=extra,
+        observed_feature_coverage=coverage,
+        uncertainty=None,
+        projector_name=projector_name,
+        projector_version="0.1",
+        parameters=dict(parameters),
+        vocabulary_id=vocabulary.sample_id,
+        missing_features=missing,
+        extra_features=extra,
     )

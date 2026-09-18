@@ -288,9 +288,7 @@ def test_feature_overlap_reports_insufficient_common_ground() -> None:
 
 def test_recurrence_result_carries_the_overlap_diagnostic() -> None:
     base = base_programs()
-    sample_sets = tuple(
-        program_set(f"d{i}", np.roll(base, i, axis=0)) for i in range(3)
-    )
+    sample_sets = tuple(program_set(f"d{i}", np.roll(base, i, axis=0)) for i in range(3))
 
     recurrence = sccs.compute_recurrence(
         sample_sets, min_similarity=0.5, n_permutations=20, random_state=0
@@ -341,13 +339,9 @@ def test_recurrence_consumes_only_persisted_program_results(tmp_path) -> None:
     in_memory = sccs.build_recurrent_vocabulary(sample_sets, min_samples=3, **options)
     persisted = sccs.build_recurrent_vocabulary(restored, min_samples=3, **options)
 
-    np.testing.assert_array_equal(
-        in_memory.vocabulary.weights, persisted.vocabulary.weights
-    )
+    np.testing.assert_array_equal(in_memory.vocabulary.weights, persisted.vocabulary.weights)
     assert in_memory.reference_sample_id == persisted.reference_sample_id
-    for first, second in zip(
-        in_memory.pairwise_matches, persisted.pairwise_matches, strict=True
-    ):
+    for first, second in zip(in_memory.pairwise_matches, persisted.pairwise_matches, strict=True):
         np.testing.assert_array_equal(first.similarities, second.similarities)
         np.testing.assert_array_equal(first.null_scores, second.null_scores)
         assert first.p_value == second.p_value

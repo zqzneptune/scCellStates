@@ -62,28 +62,41 @@ def _read_10x_h5(path: Path) -> ad.AnnData:
             features = group["features"]
             if not isinstance(features, h5py.Group) or not {"id", "name"}.issubset(features):
                 raise DatasetError("malformed 10x HDF5: /matrix/features is incomplete")
-            feature_ids = [str(value, "utf-8") if isinstance(value, bytes) else str(value)
-                           for value in features["id"][:]]
-            symbols = [str(value, "utf-8") if isinstance(value, bytes) else str(value)
-                       for value in features["name"][:]]
+            feature_ids = [
+                str(value, "utf-8") if isinstance(value, bytes) else str(value)
+                for value in features["id"][:]
+            ]
+            symbols = [
+                str(value, "utf-8") if isinstance(value, bytes) else str(value)
+                for value in features["name"][:]
+            ]
             if "feature_type" in features:
-                kinds = [str(value, "utf-8") if isinstance(value, bytes) else str(value)
-                         for value in features["feature_type"][:]]
+                kinds = [
+                    str(value, "utf-8") if isinstance(value, bytes) else str(value)
+                    for value in features["feature_type"][:]
+                ]
                 keep = np.asarray([kind == "Gene Expression" for kind in kinds])
             else:
                 keep = np.ones(len(feature_ids), dtype=bool)
             if not keep.any():
                 raise DatasetError("10x HDF5 contains no Gene Expression features")
-            barcodes = [str(value, "utf-8") if isinstance(value, bytes) else str(value)
-                        for value in group["barcodes"][:]]
+            barcodes = [
+                str(value, "utf-8") if isinstance(value, bytes) else str(value)
+                for value in group["barcodes"][:]
+            ]
             shape = tuple(int(value) for value in group["shape"][:])
             if len(shape) != 2 or shape != (len(feature_ids), len(barcodes)):
                 raise DatasetError("malformed 10x HDF5: matrix dimensions do not match annotations")
-            values = sparse.csc_matrix(
-                (group["data"][:], group["indices"][:], group["indptr"][:]),
-                shape=shape,
-                dtype=np.float32,
-            ).tocsr().T[:, keep].tocsr()
+            values = (
+                sparse.csc_matrix(
+                    (group["data"][:], group["indices"][:], group["indptr"][:]),
+                    shape=shape,
+                    dtype=np.float32,
+                )
+                .tocsr()
+                .T[:, keep]
+                .tocsr()
+            )
     except OSError as error:
         raise DatasetError(f"cannot read HDF5 input {path}: {error}") from error
     if len(set(np.asarray(feature_ids)[keep])) != int(keep.sum()):
@@ -193,16 +206,22 @@ def _parts_from_directory(path: Path) -> dict[str, dict[str, Path]]:
     # Cell Ranger's standard single-sample directory has unprefixed files;
     # accept compressed and uncompressed, plus the legacy genes names.
     if not parts:
+
         def find(*names: str) -> Path | None:
             for name in names:
                 candidate = path / name
                 if candidate.exists():
                     return candidate
             return None
+
         barcodes = find("barcodes.tsv.gz", "barcodes.tsv", "barcodes.txt")
         features = find(
-            "features.tsv.gz", "features.tsv", "genes.tsv.gz", "genes.tsv",
-            "genes.txt.gz", "genes.txt",
+            "features.tsv.gz",
+            "features.tsv",
+            "genes.tsv.gz",
+            "genes.tsv",
+            "genes.txt.gz",
+            "genes.txt",
         )
         matrix = find("matrix.mtx.gz", "matrix.mtx")
         if barcodes and features and matrix:

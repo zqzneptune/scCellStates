@@ -158,11 +158,10 @@ comparison is impossible, and the call raises with those counts rather than
 quietly falling back to selecting genes across the whole cohort, which would
 weaken the independence the comparison depends on.
 
-All three modes resolve to the same internal representation and the same two
-steps: `compute_recurrence()` measures how programs recur across samples, then
-`build_vocabulary()` selects those that qualify. Call those directly when you
-want the recurrence evidence even though nothing qualifies, because
-`find_recurrent_programs()` composes them and raises when nothing recurs.
+The cohort workflows use the same two public steps: `compute_recurrence()`
+measures how programs recur across samples, then `build_vocabulary()` selects
+programs that meet the requested thresholds. Call those functions directly
+when you need recurrence evidence even when no program qualifies.
 
 `project()` scores cells against a frozen vocabulary and accepts a `ProgramSet`,
 a `VocabularyFit`, a `ProgramVocabulary`, or a `CohortResult` directly. The
@@ -185,24 +184,21 @@ separately in different samples represent the same process. `compute_recurrence(
 reports it as optimal one-to-one matches, random-assignment nulls, and
 per-sample redundancy.
 
-Neither is sufficient alone. A stable meta-program vocabulary requires
+Neither is sufficient alone. A reproducible meta-program vocabulary requires
 within-sample stability, cross-sample recurrence above the assignment null, and
 non-redundancy, which is why `build_vocabulary()` takes `min_samples` and an
-optional `max_redundancy`. Qualifying for a vocabulary is a threshold decision
-about programs, not a biological validation claim about a state representation;
-use `decide_promotion()` with held-out evidence for that.
+optional `max_redundancy`. A vocabulary is a representation-learning result;
+biological interpretation should be performed with held-out samples and
+independent validation.
 
 ## Choosing a biological population
 
-Discover programs within a biologically coherent population. Proximal tubule
-cells across many donors is the intended scope for tubule state programs. All
-kidney cell types across those same donors is not: the dominant programs would
-reflect epithelial, endothelial, immune, and stromal identity rather than
-within-cell-type state variation.
+Discover programs within a biologically coherent population. Mixing distinct
+cell types can cause the dominant programs to reflect cell identity rather than
+within-population state variation.
 
-The package does not require a particular annotation method, but it does not
-choose this boundary for you. Subset to the population you mean before calling
-`fit_atlas()` or `fit_samples()`.
+The package does not choose this population boundary for you. Subset to the
+population of interest before calling `fit_atlas()` or `fit_samples()`.
 
 ## Portable per-sample results
 
@@ -242,9 +238,10 @@ each sample selects its own genes by design, and recurrence is measured on the
 features they do share.
 
 Identical inputs produce byte-identical artifacts within one environment, so a
-result can be checksummed. Nothing timestamped and no software version is
-recorded; the artifact's `schema_version` is the only version gate, because it
-is the only one that changes what the stored fields mean.
+result can be checksummed. Artifacts contain a schema version, package version,
+and reserved git-commit field (which is `null` when no source checkout commit
+is available); no timestamp is written. The schema version is the compatibility
+gate for stored fields.
 
 ## Freezing a recurrent vocabulary
 
@@ -280,11 +277,12 @@ per-sample gene axes at once.
 
 ## Recurrent program vocabulary
 
-Phase 1 supports deterministic NMF program discovery independently within each
-biological sample, rank-based one-to-one program matching, random-assignment
-nulls, redundancy diagnostics, and training-sample-only consensus vocabularies.
-Input expression must already contain the preprocessing chosen by the caller;
-the estimator does not normalize or select genes implicitly.
+The package supports deterministic NMF program discovery independently within
+each biological sample, rank-based one-to-one program matching,
+random-assignment nulls, redundancy diagnostics, and consensus vocabularies
+fit from declared training samples. Input expression must already contain the
+preprocessing chosen by the caller; this lower-level estimator does not
+normalize or select genes implicitly.
 
 ```python
 import sccellstates as sccs
@@ -326,7 +324,7 @@ This retains only anchor programs that match in every computational repeat.
 Repeated fits improve within-sample stability but never count as independent
 biological samples when constructing a recurrent vocabulary.
 
-## Runnable candidate pipeline
+## Sample-aware evaluation pipeline
 
 `fit_pipeline()` connects sample-aware splitting, train-fitted preprocessing,
 within-sample NMF, recurrent vocabulary construction, frozen program scoring,
@@ -350,8 +348,7 @@ candidate = result.coordinates["direct"]
 Only training samples are used to fit preprocessing parameters, discover
 programs, construct the recurrent vocabulary, and fit state representations.
 Validation and test samples are transformed with those frozen objects. Pipeline
-outputs are candidates for evaluation, not claims of biological validation or
-promotion.
+outputs are intended for evaluation on held-out samples.
 
 ## Lineage-aware vocabularies
 
@@ -370,12 +367,11 @@ hierarchy = sccs.fit_hierarchical_vocabularies(
         n_programs=10, random_state=42
     ),
 )
-lineage_fit = hierarchy.lineage_vocabularies["proximal_tubule"]
+lineage_fit = hierarchy.lineage_vocabularies["lineage_a"]
 ```
 
-The optional shared vocabulary is evidence of recurrent programs across the
-lineage-specific vocabularies; it does not establish biological equivalence or
-replace held-out evaluation.
+The optional shared vocabulary summarizes programs recurring across the
+lineage-specific vocabularies; it does not replace held-out evaluation.
 
 The stored gene weights use `.varm["sccs_programs"]`; matching, null,
 recurrence, and redundancy provenance is recorded under
@@ -449,6 +445,13 @@ the caller uses `.obsm["X_sccs_state"]` with fit provenance under
 `.uns["sccellstates"]["state_representation"]`. No baseline is selected
 automatically.
 
+The stable methods surface is candidate-program discovery with cNMF/NMF,
+assignment-based recurrence and nulls, recurrent vocabulary construction, and
+fixed-vocabulary projection with direct activities, NNLS, regularized NNLS,
+simplex, and count-scale Poisson methods. Negative-binomial, neural, and
+variational projectors are experimental and may change between v0.x releases.
+They are included for comparison, not as a promise of long-term API stability.
+
 ## Command line
 
 The primary command discovers programs in one H5AD sample:
@@ -509,8 +512,8 @@ same artifacts a distributed one does. When programs recur, the vocabulary is
 frozen to a `vocabulary/` directory that `load_program_vocabulary()` can read
 back.
 
-For the existing end-to-end candidate workflow, the package also provides a
-reproducible H5AD cohort command. Use one atlas file whose
+For a complete sample-aware workflow, the package also provides a reproducible
+H5AD cohort command. Use one atlas file whose
 `.obs` contains an explicit donor/sample column, or pass multiple H5AD files
 with the same gene identifiers. QC, training-only gene selection, program
 discovery, state fitting, and result writing are all controlled by the package:
@@ -531,7 +534,7 @@ python -m sccellstates run \
   --seed 42
 ```
 
-Each output directory contains `candidate.h5ad`, CSV diagnostic reports, and
+Each output directory contains an annotated result, CSV diagnostic reports, and
 `run.json` with the split, parameters, QC settings, and provenance. The CLI
 does not infer donor identity from filenames and does not use validation or
 test samples to fit preprocessing, gene selection, or the vocabulary.
