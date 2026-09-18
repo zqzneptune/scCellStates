@@ -8,18 +8,22 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import anndata as ad
+import numpy as np
 import pandas as pd
 
 from sccellstates.api import aggregate as aggregate_results
+from sccellstates.api import compare_projectors, fit_atlas, fit_samples, project
 from sccellstates.api import fit as fit_single_sample
-from sccellstates.api import fit_atlas, fit_samples
 from sccellstates.dataset import (
     filter_anndata_cells,
     select_training_genes,
 )
 from sccellstates.io import (
+    load_program_vocabulary,
     save_program_result,
     save_program_vocabulary,
+    save_projection_benchmark,
+    save_state_result,
     store_program_vocabulary,
     to_jsonable,
 )
@@ -270,6 +274,59 @@ def _aggregate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _projector_options(args: argparse.Namespace, method: str) -> dict[str, object]:
+    """Translate CLI projector flags into method-specific constructor options."""
+    if method == "regularized_nnls":
+        return {"l1": args.l1, "l2": args.l2}
+    if method == "poisson":
+        return {"max_iter": args.max_iter, "tol": args.tol}
+    return {}
+
+
+def _project(args: argparse.Namespace) -> int:
+    vocabulary = load_program_vocabulary(args.vocabulary)
+    method = args.method
+    result = project(
+        Path(args.input), vocabulary, layer=args.layer, preprocessing=args.preprocessing,
+        method=method, sample_id=args.sample_id or Path(args.input).stem,
+        **_projector_options(args, method),
+    )
+    destination = save_state_result(result, args.output, overwrite=args.overwrite)
+    print(f"wrote {destination}")
+    return 0
+
+
+def _benchmark_table(benchmark: object) -> pd.DataFrame:
+    """Render stable method-comparable fields for a TSV report."""
+    rows = []
+    for method in benchmark.methods:
+        for result in benchmark.results[method]:
+            rows.append({
+                "method": method,
+                "sample": result.sample_id,
+                "projection_error": float(result.projection_error.mean()),
+                "state_sparsity": float(np.mean(result.normalized_states == 0)),
+                "feature_coverage": result.feature_coverage,
+                "success": True,
+            })
+    return pd.DataFrame(rows)
+
+
+def _compare(args: argparse.Namespace) -> int:
+    vocabulary = load_program_vocabulary(args.vocabulary)
+    methods = _csv_values(args.methods)
+    options = {method: _projector_options(args, method) for method in methods}
+    samples = {Path(path).stem: Path(path) for path in args.input}
+    benchmark = compare_projectors(
+        samples, vocabulary, methods=methods,
+        layer=args.layer, preprocessing=args.preprocessing, projector_options=options,
+    )
+    destination = save_projection_benchmark(benchmark, args.output, overwrite=args.overwrite)
+    _benchmark_table(benchmark).to_csv(destination / "comparison.tsv", sep="\t", index=False)
+    print(f"wrote {destination}")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sccellstates")
     parser.add_argument("--version", action="version", version="0.1.0")
@@ -368,6 +425,45 @@ def _parser() -> argparse.ArgumentParser:
     aggregate.add_argument("--seed", type=int, default=0)
     aggregate.add_argument("--overwrite", action="store_true")
     aggregate.set_defaults(handler=_aggregate)
+    project_parser = subparsers.add_parser(
+        "project", help="project one expression matrix onto a frozen vocabulary"
+    )
+    project_parser.add_argument("--input", required=True, help="AnnData or native 10x RNA input")
+    project_parser.add_argument("--vocabulary", required=True, help="saved vocabulary directory")
+    project_parser.add_argument("--output", required=True, help="state-result output directory")
+    project_parser.add_argument("--sample-id")
+    project_parser.add_argument(
+        "--method", choices=("nnls", "regularized_nnls", "simplex", "poisson"), default="nnls"
+    )
+    project_parser.add_argument("--layer")
+    project_parser.add_argument(
+        "--preprocessing", choices=("identity", "library_size_log1p"), default="identity"
+    )
+    project_parser.add_argument("--l1", type=float, default=0.0)
+    project_parser.add_argument("--l2", type=float, default=0.01)
+    project_parser.add_argument("--max-iter", type=int, default=1_000)
+    project_parser.add_argument("--tol", type=float, default=1e-8)
+    project_parser.add_argument("--overwrite", action="store_true")
+    project_parser.set_defaults(handler=_project)
+    compare = subparsers.add_parser(
+        "compare", help="compare fixed-vocabulary projectors on expression matrices"
+    )
+    compare.add_argument(
+        "--input", required=True, nargs="+", help="AnnData or native 10x RNA inputs"
+    )
+    compare.add_argument("--vocabulary", required=True, help="saved vocabulary directory")
+    compare.add_argument("--output", required=True, help="benchmark output directory")
+    compare.add_argument("--methods", default="nnls,regularized_nnls,simplex,poisson")
+    compare.add_argument("--layer")
+    compare.add_argument(
+        "--preprocessing", choices=("identity", "library_size_log1p"), default="identity"
+    )
+    compare.add_argument("--l1", type=float, default=0.0)
+    compare.add_argument("--l2", type=float, default=0.01)
+    compare.add_argument("--max-iter", type=int, default=1_000)
+    compare.add_argument("--tol", type=float, default=1e-8)
+    compare.add_argument("--overwrite", action="store_true")
+    compare.set_defaults(handler=_compare)
     return parser
 
 

@@ -26,6 +26,7 @@ _PROGRAM_RESULT_SCHEMA_VERSION = "1.0"
 _SUPPORTED_PROGRAM_RESULT_SCHEMAS = frozenset({_PROGRAM_RESULT_SCHEMA_VERSION})
 _PROGRAM_RESULT_KEY = "program_result"
 _H5AD_SUFFIXES = frozenset({".h5ad", ".h5"})
+_PROJECTION_SCHEMA_VERSION = "1.0"
 
 
 class InputError(ValueError):
@@ -483,6 +484,214 @@ def load_program_vocabulary(path: str | Path) -> ProgramVocabulary:
         dropped_anchor_indices=tuple(int(i) for i in metadata["dropped_anchor_indices"]),
         parameters=dict(provenance.get("parameters", {})),
     )
+
+
+def _program_set_payload(programs: object) -> tuple[dict[str, object], np.ndarray]:
+    """Return JSON metadata and weights for a frozen program set."""
+    from sccellstates.programs import ProgramSet
+
+    if not isinstance(programs, ProgramSet):
+        raise TypeError("programs must be a ProgramSet")
+    return (
+        {
+            "sample_id": programs.sample_id,
+            "feature_names": list(programs.feature_names),
+            "n_cells": programs.n_cells,
+            "estimator": programs.estimator,
+            "parameters": to_jsonable(dict(programs.parameters)),
+        },
+        np.asarray(programs.weights, dtype=np.float64),
+    )
+
+
+def _program_set_from_payload(metadata: Mapping[str, object], weights: np.ndarray):
+    """Rebuild a validated frozen program set from a projection artifact."""
+    from sccellstates.programs import ProgramSet
+
+    try:
+        return ProgramSet(
+            sample_id=str(metadata["sample_id"]),
+            feature_names=tuple(map(str, metadata["feature_names"])),
+            weights=weights,
+            n_cells=int(metadata["n_cells"]),
+            estimator=str(metadata["estimator"]),
+            parameters=dict(metadata.get("parameters", {})),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise InputError(f"malformed frozen program set: {error}") from error
+
+
+def _projection_root(path: str | Path, *, overwrite: bool) -> Path:
+    root = Path(path)
+    if root.exists():
+        if not root.is_dir():
+            raise InputError(f"projection artifact path is not a directory: {root}")
+        if not overwrite:
+            raise InputError(f"projection artifact already exists: {root}")
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def save_projector(projector: object, path: str | Path, *, overwrite: bool = False) -> Path:
+    """Persist a fitted fixed-vocabulary projector as a portable directory."""
+    from sccellstates.projection import StateProjector
+
+    if not isinstance(projector, StateProjector):
+        raise TypeError("projector must be a StateProjector")
+    root = _projection_root(path, overwrite=overwrite)
+    vocabulary, weights = _program_set_payload(projector.vocabulary)
+    metadata = {
+        "schema_version": _PROJECTION_SCHEMA_VERSION,
+        "artifact": "fitted_projector",
+        "projector_name": projector.spec.name,
+        "parameters": to_jsonable(projector.get_params()),
+        "vocabulary": vocabulary,
+    }
+    (root / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    np.savez_compressed(root / "programs.npz", weights=weights)
+    return root
+
+
+def load_projector(path: str | Path):
+    """Load a projector persisted by :func:`save_projector`."""
+    from sccellstates.projection import make_projector
+
+    root = Path(path)
+    if not root.is_dir():
+        raise InputError(f"projector path is not a directory: {root}")
+    metadata = _read_json(root / "metadata.json")
+    if metadata.get("artifact") != "fitted_projector":
+        raise InputError(f"{root} is not a fitted projector artifact")
+    if metadata.get("schema_version") != _PROJECTION_SCHEMA_VERSION:
+        raise InputError(f"unsupported projector schema: {metadata.get('schema_version')!r}")
+    try:
+        with np.load(root / "programs.npz", allow_pickle=False) as arrays:
+            programs = _program_set_from_payload(metadata["vocabulary"], arrays["weights"])
+        return make_projector(str(metadata["projector_name"]), programs, **metadata["parameters"])
+    except FileNotFoundError:
+        raise InputError(f"{root} is missing projector metadata or arrays") from None
+    except (KeyError, TypeError, ValueError) as error:
+        raise InputError(f"malformed projector artifact {root}: {error}") from error
+
+
+def save_state_result(result: object, path: str | Path, *, overwrite: bool = False) -> Path:
+    """Persist one :class:`StateResult` without storing the input expression matrix."""
+    from sccellstates.projection import StateResult
+
+    if not isinstance(result, StateResult):
+        raise TypeError("result must be a StateResult")
+    root = _projection_root(path, overwrite=overwrite)
+    vocabulary, weights = _program_set_payload(result.vocabulary)
+    arrays: dict[str, np.ndarray] = {
+        "weights": weights,
+        "usages": result.usages,
+        "normalized_states": result.normalized_states,
+        "projection_error": result.projection_error,
+        "relative_error": result.relative_error,
+        "observed_feature_coverage": result.observed_feature_coverage,
+    }
+    if result.reconstructed_features is not None:
+        arrays["reconstructed_features"] = result.reconstructed_features
+    if result.uncertainty is not None:
+        arrays["uncertainty"] = result.uncertainty
+    metadata = {
+        "schema_version": _PROJECTION_SCHEMA_VERSION,
+        "artifact": "state_result",
+        "cell_names": list(result.cell_names),
+        "sample_id": result.sample_id,
+        "projector_name": result.projector_name,
+        "projector_version": result.projector_version,
+        "parameters": to_jsonable(dict(result.parameters)),
+        "vocabulary_id": result.vocabulary_id,
+        "feature_coverage": result.feature_coverage,
+        "missing_features": list(result.missing_features),
+        "extra_features": list(result.extra_features),
+        "warnings": list(result.warnings),
+        "vocabulary": vocabulary,
+    }
+    (root / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    np.savez_compressed(root / "arrays.npz", **arrays)
+    return root
+
+
+def load_state_result(path: str | Path):
+    """Load a state result persisted by :func:`save_state_result`."""
+    from sccellstates.projection import StateResult
+
+    root = Path(path)
+    if not root.is_dir():
+        raise InputError(f"state result path is not a directory: {root}")
+    metadata = _read_json(root / "metadata.json")
+    if metadata.get("artifact") != "state_result":
+        raise InputError(f"{root} is not a state result artifact")
+    try:
+        with np.load(root / "arrays.npz", allow_pickle=False) as arrays:
+            vocabulary = _program_set_from_payload(metadata["vocabulary"], arrays["weights"])
+            optional = {
+                name: arrays[name] if name in arrays else None
+                for name in ("reconstructed_features", "uncertainty")
+            }
+            return StateResult(
+                usages=arrays["usages"], normalized_states=arrays["normalized_states"],
+                cell_names=tuple(map(str, metadata["cell_names"])),
+                sample_id=str(metadata["sample_id"]), vocabulary=vocabulary,
+                reconstructed_features=optional["reconstructed_features"],
+                projection_error=arrays["projection_error"],
+                relative_error=arrays["relative_error"],
+                feature_coverage=float(metadata["feature_coverage"]),
+                observed_feature_coverage=arrays["observed_feature_coverage"],
+                uncertainty=optional["uncertainty"],
+                projector_name=str(metadata["projector_name"]),
+                projector_version=str(metadata["projector_version"]),
+                parameters=dict(metadata["parameters"]),
+                vocabulary_id=str(metadata["vocabulary_id"]),
+                missing_features=tuple(map(str, metadata.get("missing_features", []))),
+                extra_features=tuple(map(str, metadata.get("extra_features", []))),
+                warnings=tuple(map(str, metadata.get("warnings", []))),
+            )
+    except FileNotFoundError:
+        raise InputError(f"{root} is missing state-result metadata or arrays") from None
+    except (KeyError, TypeError, ValueError) as error:
+        raise InputError(f"malformed state-result artifact {root}: {error}") from error
+
+
+def save_projection_benchmark(
+    benchmark: object, path: str | Path, *, overwrite: bool = False
+) -> Path:
+    """Persist a :class:`ProjectionBenchmark` and each contained state result."""
+    from sccellstates.projection import ProjectionBenchmark
+
+    if not isinstance(benchmark, ProjectionBenchmark):
+        raise TypeError("benchmark must be a ProjectionBenchmark")
+    root = _projection_root(path, overwrite=overwrite)
+    metadata = {"schema_version": _PROJECTION_SCHEMA_VERSION, "artifact": "projection_benchmark",
+                "methods": list(benchmark.methods)}
+    (root / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    for method in benchmark.methods:
+        for index, result in enumerate(benchmark.results[method]):
+            save_state_result(result, root / method / str(index), overwrite=True)
+    return root
+
+
+def load_projection_benchmark(path: str | Path):
+    """Load a benchmark persisted by :func:`save_projection_benchmark`."""
+    from sccellstates.projection import ProjectionBenchmark
+
+    root = Path(path)
+    metadata = _read_json(root / "metadata.json")
+    if metadata.get("artifact") != "projection_benchmark":
+        raise InputError(f"{root} is not a projection benchmark artifact")
+    methods = tuple(map(str, metadata["methods"]))
+    results = {}
+    for method in methods:
+        method_root = root / method
+        if not method_root.is_dir():
+            raise InputError(f"benchmark is missing results for method {method!r}")
+        indices = sorted(
+            (int(entry.name) for entry in method_root.iterdir() if entry.is_dir()),
+        )
+        results[method] = tuple(load_state_result(method_root / str(index)) for index in indices)
+    return ProjectionBenchmark(results=results, methods=methods)
 
 
 def _program_result_envelope(adata: ad.AnnData, *, name: str) -> Mapping[str, Any]:

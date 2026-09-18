@@ -18,6 +18,7 @@ from sccellstates.programs import (
     ProgramStabilityFit,
     stabilize_programs,
 )
+from sccellstates.projection import ProjectionBenchmark, available_projectors, make_projector
 from sccellstates.recurrence import (
     FeatureOverlap,
     ProgramVocabulary,
@@ -34,7 +35,7 @@ from sccellstates.samples import (
     samples_from_atlas,
     samples_from_sources,
 )
-from sccellstates.state import NNLSProjector, ProgramScorer
+from sccellstates.state import ProgramScorer
 
 type Input = str | Path | ad.AnnData
 
@@ -998,6 +999,8 @@ def project(
     layer: str | None = None,
     preprocessing: str = "identity",
     method: str = "direct",
+    sample_id: str = "projection",
+    **projector_kwargs: object,
 ) -> ProjectionResult:
     """Project cells onto a fixed recurrent or sample-specific vocabulary.
 
@@ -1009,12 +1012,12 @@ def project(
     onto nothing.
     """
     _validate_workflow(modality, "nmf")
-    if method not in {"direct", "nnls"}:
-        raise APIError("project method must be 'direct' or 'nnls'")
+    if method == "direct" and projector_kwargs:
+        raise APIError("projector options are not valid for method='direct'")
     programs = _as_program_set(vocabulary)
     prepared = _prepare_single_sample(
         source,
-        sample_id="projection",
+        sample_id=sample_id,
         layer=layer,
         preprocessing=preprocessing,
         min_counts_per_cell=0,
@@ -1025,6 +1028,16 @@ def project(
         remove_ribosomal=False,
         exclude_genes=(),
     )
+    if method == "direct":
+        usages = ProgramScorer(programs).transform(prepared)
+        return ProjectionResult(
+            usages=usages,
+            cell_names=tuple(map(str, prepared.obs_names)),
+            vocabulary=programs,
+            provenance={
+                "workflow": "fixed_vocabulary_projection", "method": method, "layer": layer
+            },
+        )
     if method == "nnls":
         expected_preprocessing = programs.parameters.get("preprocessing")
         if expected_preprocessing is not None and preprocessing != expected_preprocessing:
@@ -1032,29 +1045,59 @@ def project(
                 f"projection preprocessing {preprocessing!r} is incompatible with the "
                 f"vocabulary scale {expected_preprocessing!r}"
             )
-        nnls_result = NNLSProjector(programs).transform(prepared)
-        usages = nnls_result.usages
-        return ProjectionResult(
-            usages=usages,
-            cell_names=nnls_result.cell_names,
-            vocabulary=programs,
-            provenance={
-                "workflow": "fixed_vocabulary_projection", "method": method, "layer": layer
-            },
-            states=nnls_result.states,
-            projection_error=nnls_result.projection_error,
-            relative_reconstruction_error=nnls_result.relative_reconstruction_error,
-            feature_coverage=nnls_result.feature_coverage,
-            observed_feature_coverage=nnls_result.observed_feature_coverage,
-            missing_features=nnls_result.missing_features,
-            extra_features=nnls_result.extra_features,
-            warnings=nnls_result.warnings,
-            vocabulary_id=nnls_result.vocabulary_id,
+        projector = make_projector("nnls", programs, **projector_kwargs)
+        return projector.transform(prepared, layer=None, sample_id=sample_id)
+    if method not in available_projectors():
+        raise APIError(
+            f"unknown project method {method!r}; available: direct, "
+            f"{', '.join(available_projectors())}"
         )
-    usages = ProgramScorer(programs).transform(prepared)
-    return ProjectionResult(
-        usages=usages,
-        cell_names=tuple(map(str, prepared.obs_names)),
-        vocabulary=programs,
-        provenance={"workflow": "fixed_vocabulary_projection", "method": method, "layer": layer},
-    )
+    try:
+        projector = make_projector(method, programs, **projector_kwargs)
+    except (TypeError, ValueError) as error:
+        raise APIError(str(error)) from error
+    return projector.transform(prepared, layer=None, sample_id=sample_id)
+
+
+def compare_projectors(
+    samples: Sequence[Input] | Mapping[str, Input],
+    vocabulary: VocabularyFit | ProgramVocabulary | CohortResult | ProgramSet,
+    *,
+    methods: Sequence[str],
+    modality: str = "rna",
+    layer: str | None = None,
+    preprocessing: str = "identity",
+    projector_options: Mapping[str, Mapping[str, object]] | None = None,
+    **projector_kwargs: object,
+) -> ProjectionBenchmark:
+    """Apply registered projectors to identical samples and vocabulary.
+
+    This helper deliberately performs no model selection. It returns the raw
+    comparable results so evaluation policy can be applied using sample-level
+    splits and training-only tuning outside this convenience function.
+    """
+    names = tuple(str(method) for method in methods)
+    if not names:
+        raise APIError("methods must contain at least one projector")
+    if isinstance(samples, Mapping):
+        ordered_samples = tuple((name, samples[name]) for name in sorted(samples))
+    else:
+        ordered_samples = tuple((None, sample) for sample in samples)
+    if not ordered_samples:
+        raise APIError("samples must contain at least one input")
+    options = {} if projector_options is None else {
+        str(name): dict(values) for name, values in projector_options.items()
+    }
+    results = {
+        method: tuple(
+            project(
+                sample, vocabulary, modality=modality, layer=layer,
+                preprocessing=preprocessing, method=method,
+                sample_id=sample_id or "projection",
+                **projector_kwargs, **options.get(method, {}),
+            )
+            for sample_id, sample in ordered_samples
+        )
+        for method in names
+    }
+    return ProjectionBenchmark(results=results, methods=names)
